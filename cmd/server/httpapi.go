@@ -171,6 +171,10 @@ func (s *server) routes() http.Handler {
 
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 
+	// Rotas proprietárias de IA
+	aiMux := newAIRouter(s.aiGateway, s.aiSessions, s.aiProviders, s.aiEvents, s.log, s.sessions)
+	aiMux.mount(mux)
+
 	if s.staticDir != "" {
 		if _, err := os.Stat(s.staticDir); err == nil {
 			mux.Handle("/", http.FileServer(http.Dir(s.staticDir)))

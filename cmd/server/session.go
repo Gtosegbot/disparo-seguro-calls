@@ -257,7 +257,13 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 			return
 		}
 		// grava o lado do peer (WhatsApp) mesmo se o navegador ainda não estiver pronto
-		ac.recorder.writePeer(pcm16)
+		if ac.recorder != nil {
+			ac.recorder.writePeer(pcm16)
+		}
+		// Se esta chamada tem IA ativa, encaminha o áudio para o Voice Gateway
+		if ac.aiSessionID != "" && s.mgr.aiGateway != nil {
+			s.mgr.aiGateway.HandlePeerAudio(ac.aiSessionID, pcm16)
+		}
 		if ac.bridge == nil || ac.browserOpus == nil {
 			return
 		}
@@ -604,6 +610,9 @@ func (s *Session) removeCall(callID string) {
 	ac, ok := s.reg.remove(callID)
 	if !ok {
 		return
+	}
+	if ac.aiSessionID != "" && s.mgr.aiGateway != nil {
+		s.mgr.aiGateway.StopAISession(ac.aiSessionID, "call_ended")
 	}
 	s.finalizeRecording(ac)
 	if ac.bridge != nil {

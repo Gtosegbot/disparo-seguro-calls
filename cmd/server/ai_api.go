@@ -1,4 +1,4 @@
-﻿// ai_api.go — HTTP handlers for the AI voice session API.
+// ai_api.go — HTTP handlers for the AI voice session API.
 // Mounts under /api/ai/. Tenant isolation is enforced on every request.
 package main
 
@@ -125,6 +125,18 @@ func (r *aiRouter) startSession(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	waSess, ok := r.sessions.Get(sess.SessionID)
+	if !ok {
+		writeErrorAI(w, http.StatusNotFound, "whatsapp session not found")
+		return
+	}
+
+	ac, ok := waSess.reg.get(sess.CallID)
+	if !ok {
+		writeErrorAI(w, http.StatusNotFound, "call not found")
+		return
+	}
+
 	promptCtx := &session.PromptContext{
 		PlatformRules:  "Você é um agente de voz do Disparo Seguro. Seja conciso, profissional e humanizado.",
 		ProfilePrompt:  sess.Profile.Prompt,
@@ -132,8 +144,12 @@ func (r *aiRouter) startSession(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// writeFn routes synthesised audio back into the AstraCalls call leg.
-	// In production, inject into the DataChannel via CallManager.OnPeerAudio.
-	writeFn := func(_ []float32) {}
+	writeFn := func(samples []float32) {
+		ac, ok := waSess.reg.get(sess.CallID)
+		if ok {
+			ac.cm.FeedCapturedPCM(samples)
+		}
+	}
 
 	started, err := r.gateway.StartAISession(
 		req.Context(),
@@ -151,6 +167,9 @@ func (r *aiRouter) startSession(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Ativa a interceptação de áudio setando o ID de IA na chamada ativa
+	ac.aiSessionID = started.ID
+
 	r.log.Info("ai_api: session started", "id", started.ID)
 	writeJSONAI(w, http.StatusOK, started.Snapshot())
 }
@@ -160,7 +179,8 @@ func (r *aiRouter) stopSession(w http.ResponseWriter, req *http.Request) {
 	tenantID := tenantFromRequest(req)
 	id := req.PathValue("id")
 
-	if _, err := r.sessionReg.Get(id, tenantID); err != nil {
+	sess, err := r.sessionReg.Get(id, tenantID)
+	if err != nil {
 		writeErrorAI(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -171,6 +191,13 @@ func (r *aiRouter) stopSession(w http.ResponseWriter, req *http.Request) {
 	_ = json.NewDecoder(req.Body).Decode(&body)
 	if body.Reason == "" {
 		body.Reason = "api_stop"
+	}
+
+	// Limpa o vinculo de IA na chamada ativa
+	if waSess, ok := r.sessions.Get(sess.SessionID); ok {
+		if ac, ok := waSess.reg.get(sess.CallID); ok {
+			ac.aiSessionID = ""
+		}
 	}
 
 	r.gateway.StopAISession(id, body.Reason)

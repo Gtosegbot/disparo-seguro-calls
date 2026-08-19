@@ -10,16 +10,19 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
+
+	aigateway "wacalls/internal/ai/gateway"
 )
 
 type SessionManager struct {
-	appCtx   context.Context
-	db       *dbProvider
-	broker   *Broker
-	store    *sessionStore
-	waLogger waLog.Logger
-	log      *slog.Logger
-	maxCalls int
+	appCtx    context.Context
+	db        *dbProvider
+	broker    *Broker
+	store     *sessionStore
+	waLogger  waLog.Logger
+	log       *slog.Logger
+	maxCalls  int
+	aiGateway *aigateway.VoiceGateway // AI layer gateway
 
 	mu       sync.RWMutex
 	sessions map[string]*Session

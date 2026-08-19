@@ -13,6 +13,7 @@ type activeCall struct {
 	wsBridge    *wsBridge // ponte WebSocket (alternativa ao pion WebRTC para proxies HTTP)
 	browserOpus media.Codec
 	recorder    *callRecorder // nil quando a gravação está desligada na sessão
+	aiSessionID string        // ID da AISession associada, se houver IA ativa nesta chamada
 }
 
 type callRegistry struct {

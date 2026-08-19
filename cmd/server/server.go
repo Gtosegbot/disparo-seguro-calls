@@ -3,15 +3,27 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"wacalls/internal/ai/events"
+	"wacalls/internal/ai/gateway"
+	"wacalls/internal/ai/provider"
+	"wacalls/internal/ai/session"
 )
 
 type server struct {
-	broker    *Broker
-	sessions  *SessionManager
-	log       *slog.Logger
-	staticDir string
+	broker      *Broker
+	sessions    *SessionManager
+	log         *slog.Logger
+	staticDir   string
+
+	// Camada proprietária de IA
+	aiSessions  *session.Registry
+	aiProviders *provider.Registry
+	aiEvents    *events.Bus
+	aiGateway   *gateway.VoiceGateway
 }
 
 // newServer monta o provedor de banco (Postgres, 1 banco por sessão no estilo
@@ -22,12 +34,12 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 		waLogger = waLog.Stdout("WA", "DEBUG", true)
 	}
 
-	provider, err := newDBProvider(ctx, pgURL, pgNamespace, waLogger, log)
+	dbProv, err := newDBProvider(ctx, pgURL, pgNamespace, waLogger, log)
 	if err != nil {
 		return nil, err
 	}
 
-	mainDB, err := provider.openMainDB(ctx)
+	mainDB, err := dbProv.openMainDB(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -36,10 +48,36 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 		return nil, err
 	}
 
+	// Inicialização da Camada de IA
+	aiReg := session.NewRegistry()
+	aiProvs := provider.NewRegistry()
+	aiBus := events.NewBus()
+
+	xaiKey := os.Getenv("WACALLS_XAI_KEY")
+	aiProvs.Register("grok_realtime", xaiKey, func() provider.Provider {
+		return provider.NewGrokRealtime(xaiKey, log)
+	})
+	aiProvs.Register("loopback", "", func() provider.Provider {
+		return provider.NewLoopbackProvider(log)
+	})
+
+	aiGW := gateway.NewVoiceGateway(aiReg, aiProvs, aiBus, log)
+
 	broker := NewBroker()
-	mgr := newSessionManager(ctx, provider, broker, store, waLogger, log, maxCalls)
+	mgr := newSessionManager(ctx, dbProv, broker, store, waLogger, log, maxCalls)
+	mgr.aiGateway = aiGW // injeta o gateway na gerência de sessões
+
 	broker.SnapshotFn = mgr.snapshotEvents
 	broker.AccountForSession = mgr.accountIDForSession
 
-	return &server{broker: broker, sessions: mgr, log: log, staticDir: staticDir}, nil
+	return &server{
+		broker:      broker,
+		sessions:    mgr,
+		log:         log,
+		staticDir:   staticDir,
+		aiSessions:  aiReg,
+		aiProviders: aiProvs,
+		aiEvents:    aiBus,
+		aiGateway:   aiGW,
+	}, nil
 }
