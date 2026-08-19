@@ -31,18 +31,22 @@ func (r *instancesRouter) mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/instances/{id}/pairing", r.pairingStatus)
 	mux.HandleFunc("POST /api/instances/{id}/logout", r.logout)
 	mux.HandleFunc("DELETE /api/instances/{id}", r.deleteInstance)
+
+	// ChatSeguro/Chatwoot mappings per line
+	mux.HandleFunc("GET /api/instances/{id}/chatseguro", r.getChatSeguro)
+	mux.HandleFunc("POST /api/instances/{id}/chatseguro", r.setChatSeguro)
+	mux.HandleFunc("DELETE /api/instances/{id}/chatseguro", r.deleteChatSeguro)
+	mux.HandleFunc("POST /api/instances/{id}/chatseguro/test", r.testChatSeguro)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func getAuthenticatedTenantID(req *http.Request) (string, error) {
-	// 1. Obtém o X-API-Key
 	apiKey := req.Header.Get("X-API-Key")
 	if apiKey == "" {
 		apiKey = req.URL.Query().Get("apiKey")
 	}
 
-	// 2. Compara com a chave mestra do servidor
 	masterKey := os.Getenv("WACALLS_API_KEY")
 	if masterKey != "" && apiKey == masterKey {
 		tenantID := req.Header.Get("X-Tenant-ID")
@@ -52,11 +56,9 @@ func getAuthenticatedTenantID(req *http.Request) (string, error) {
 		return tenantID, nil
 	}
 
-	// 3. Se for chave específica de tenant (começa com "tenant-")
 	if strings.HasPrefix(apiKey, "tenant-") {
 		resolvedTenant := strings.TrimPrefix(apiKey, "tenant-")
 		
-		// Proteção contra falsificação (forged X-Tenant-ID)
 		clientTenant := req.Header.Get("X-Tenant-ID")
 		if clientTenant != "" && clientTenant != resolvedTenant {
 			return "", instance.ErrForbidden
@@ -79,7 +81,6 @@ func writeErrorInst(w http.ResponseWriter, code int, msg string) {
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
-// POST /api/instances
 func (r *instancesRouter) create(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -108,7 +109,6 @@ func (r *instancesRouter) create(w http.ResponseWriter, req *http.Request) {
 	writeJSONInst(w, http.StatusCreated, inst)
 }
 
-// GET /api/instances
 func (r *instancesRouter) list(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -131,7 +131,6 @@ func (r *instancesRouter) list(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// GET /api/instances/{id}
 func (r *instancesRouter) get(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -158,7 +157,6 @@ func (r *instancesRouter) get(w http.ResponseWriter, req *http.Request) {
 	writeJSONInst(w, http.StatusOK, inst)
 }
 
-// POST /api/instances/{id}/pair
 func (r *instancesRouter) pair(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -208,7 +206,6 @@ func (r *instancesRouter) pair(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// GET /api/instances/{id}/pairing
 func (r *instancesRouter) pairingStatus(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -249,7 +246,6 @@ func (r *instancesRouter) pairingStatus(w http.ResponseWriter, req *http.Request
 	writeJSONInst(w, http.StatusOK, resp)
 }
 
-// POST /api/instances/{id}/logout
 func (r *instancesRouter) logout(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -276,7 +272,6 @@ func (r *instancesRouter) logout(w http.ResponseWriter, req *http.Request) {
 	writeJSONInst(w, http.StatusOK, map[string]string{"status": "logged_out", "instance_id": id})
 }
 
-// DELETE /api/instances/{id}
 func (r *instancesRouter) deleteInstance(w http.ResponseWriter, req *http.Request) {
 	tenantID, err := getAuthenticatedTenantID(req)
 	if err == instance.ErrForbidden {
@@ -301,4 +296,150 @@ func (r *instancesRouter) deleteInstance(w http.ResponseWriter, req *http.Reques
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/instances/{id}/chatseguro
+func (r *instancesRouter) getChatSeguro(w http.ResponseWriter, req *http.Request) {
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id := req.PathValue("id")
+	inst, err := r.manager.Get(req.Context(), tenantID, id)
+	if err != nil {
+		writeErrorInst(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	waSess, ok := r.sessions.Get(inst.SessionID)
+	if !ok {
+		writeErrorInst(w, http.StatusNotFound, "whatsapp session not found")
+		return
+	}
+
+	cw := waSess.getChatwoot()
+	status := "DISCONNECTED"
+	if cw.valid() {
+		status = "CONNECTED"
+	}
+
+	writeJSONInst(w, http.StatusOK, map[string]any{
+		"inbox_id":     inst.ChatSeguroInboxID,
+		"status":       status,
+		"channel":      "whatsapp",
+		"connected_at": time.Now().UTC(),
+	})
+}
+
+// POST /api/instances/{id}/chatseguro
+func (r *instancesRouter) setChatSeguro(w http.ResponseWriter, req *http.Request) {
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id := req.PathValue("id")
+	var body struct {
+		URL          string `json:"url"`
+		AccountID    int    `json:"account_id"`
+		AccountToken string `json:"account_token"`
+		InboxID      int    `json:"inbox_id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeErrorInst(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	if body.URL == "" || body.AccountID == 0 || body.AccountToken == "" || body.InboxID == 0 {
+		writeErrorInst(w, http.StatusBadRequest, "missing required chatwoot parameters")
+		return
+	}
+
+	cwConfig := ChatwootConfig{
+		URL:                body.URL,
+		AccountID:          body.AccountID,
+		AccountToken:       body.AccountToken,
+		InboxID:            body.InboxID,
+		Groups:             true,
+		Channels:           true,
+		GroupsSkipIncoming: false,
+		SignMsg:            false,
+		AlwaysOnline:       true,
+		ReadMessages:       true,
+	}
+
+	configBytes, _ := json.Marshal(cwConfig)
+
+	err = r.manager.SetChatSeguro(req.Context(), tenantID, id, body.InboxID, string(configBytes))
+	if err != nil {
+		writeErrorInst(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSONInst(w, http.StatusOK, map[string]any{
+		"inbox_id":      body.InboxID,
+		"status":        "CONNECTED",
+		"instance_id":   id,
+		"configured_at": time.Now().UTC(),
+	})
+}
+
+// DELETE /api/instances/{id}/chatseguro
+func (r *instancesRouter) deleteChatSeguro(w http.ResponseWriter, req *http.Request) {
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id := req.PathValue("id")
+	err = r.manager.DeleteChatSeguro(req.Context(), tenantID, id)
+	if err != nil {
+		writeErrorInst(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /api/instances/{id}/chatseguro/test
+func (r *instancesRouter) testChatSeguro(w http.ResponseWriter, req *http.Request) {
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id := req.PathValue("id")
+	inst, err := r.manager.Get(req.Context(), tenantID, id)
+	if err != nil {
+		writeErrorInst(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	waSess, ok := r.sessions.Get(inst.SessionID)
+	if !ok {
+		writeErrorInst(w, http.StatusNotFound, "whatsapp session not found")
+		return
+	}
+
+	cw := waSess.getChatwoot()
+	if !cw.valid() {
+		writeErrorInst(w, http.StatusBadRequest, "chatseguro not configured on this instance")
+		return
+	}
+
+	_, _, err = cw.req("GET", "/profile", nil)
+	if err != nil {
+		writeErrorInst(w, http.StatusBadGateway, "failed to contact chatseguro server: "+err.Error())
+		return
+	}
+
+	writeJSONInst(w, http.StatusOK, map[string]string{
+		"status":  "HEALTHY",
+		"message": "connection to chatseguro api verified successfully",
+	})
 }

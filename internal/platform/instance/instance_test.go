@@ -138,8 +138,6 @@ func TestManager_RecoveryStateConsistency(t *testing.T) {
 	db.store[inst.ID] = inst
 
 	// 2. Simular reinício do processo.
-	// O SessionManager do AstraCalls realiza o restore e chama setAuth.
-	// O whatsmeow avisa que a sessão reconectou.
 	statusAfterRestore := instance.StateConnected
 	_ = mgr.UpdateStatus(ctx, inst.SessionID, statusAfterRestore, "5511999999999")
 
@@ -149,6 +147,44 @@ func TestManager_RecoveryStateConsistency(t *testing.T) {
 	}
 	if got.SessionID != inst.SessionID {
 		t.Errorf("expected session_id mapping %q, got %q", inst.SessionID, got.SessionID)
+	}
+}
+
+// Teste de vinculação/desvinculação de ChatSeguro por linha
+func TestManager_ChatSeguroIntegration(t *testing.T) {
+	db := newMockDB()
+	sc := newMockSessionController()
+	mgr := instance.NewManager(db, sc)
+	ctx := context.Background()
+
+	inst, _ := mgr.Create(ctx, "tenant-A", "Line A")
+	db.store[inst.ID] = inst
+
+	// 1. Vincular ChatSeguro
+	config := `{"url":"http://chatwoot","account_id":1,"account_token":"tok","inbox_id":123}`
+	err := mgr.SetChatSeguro(ctx, "tenant-A", inst.ID, 123, config)
+	if err != nil {
+		t.Fatalf("failed to set chatseguro: %v", err)
+	}
+
+	if sc.chatwootConfig[inst.SessionID] != config {
+		t.Errorf("expected chatwoot config to be set, got %s", sc.chatwootConfig[inst.SessionID])
+	}
+
+	// 2. Tentar vincular com Tenant B (deve dar erro ErrForbidden)
+	err = mgr.SetChatSeguro(ctx, "tenant-B", inst.ID, 123, config)
+	if err != instance.ErrForbidden {
+		t.Errorf("expected ErrForbidden for tenant-B, got %v", err)
+	}
+
+	// 3. Remover ChatSeguro
+	err = mgr.DeleteChatSeguro(ctx, "tenant-A", inst.ID)
+	if err != nil {
+		t.Fatalf("failed to delete chatseguro: %v", err)
+	}
+
+	if sc.chatwootConfig[inst.SessionID] != "" {
+		t.Errorf("expected chatwoot config to be cleared, got %s", sc.chatwootConfig[inst.SessionID])
 	}
 }
 
@@ -203,18 +239,20 @@ func (m *mockDB) QueryContext(ctx context.Context, query string, args ...any) (*
 }
 
 type mockSessionController struct {
-	sessions    map[string]string
-	activeCalls map[string]int
-	deleted     map[string]bool
-	loggedOut   map[string]bool
+	sessions       map[string]string
+	activeCalls    map[string]int
+	deleted        map[string]bool
+	loggedOut      map[string]bool
+	chatwootConfig map[string]string
 }
 
 func newMockSessionController() *mockSessionController {
 	return &mockSessionController{
-		sessions:    make(map[string]string),
-		activeCalls: make(map[string]int),
-		deleted:     make(map[string]bool),
-		loggedOut:   make(map[string]bool),
+		sessions:       make(map[string]string),
+		activeCalls:    make(map[string]int),
+		deleted:        make(map[string]bool),
+		loggedOut:      make(map[string]bool),
+		chatwootConfig: make(map[string]string),
 	}
 }
 
@@ -236,6 +274,16 @@ func (m *mockSessionController) LogoutSession(ctx context.Context, id string) er
 
 func (m *mockSessionController) GetActiveCallsCount(id string) int {
 	return m.activeCalls[id]
+}
+
+func (m *mockSessionController) SetChatwootConfig(ctx context.Context, sessionID string, configJSON string) error {
+	m.chatwootConfig[sessionID] = configJSON
+	return nil
+}
+
+func (m *mockSessionController) DeleteChatwootConfig(ctx context.Context, sessionID string) error {
+	m.chatwootConfig[sessionID] = ""
+	return nil
 }
 
 func uuid() string {

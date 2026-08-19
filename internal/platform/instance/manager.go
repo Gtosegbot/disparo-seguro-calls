@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ type SessionController interface {
 	DeleteSession(ctx context.Context, id string) error
 	LogoutSession(ctx context.Context, id string) error
 	GetActiveCallsCount(id string) int
+	SetChatwootConfig(ctx context.Context, sessionID string, configJSON string) error
+	DeleteChatwootConfig(ctx context.Context, sessionID string) error
 }
 
 // Manager orchestrates tenant-isolated instances and QR/pairing state.
@@ -207,4 +210,40 @@ func (m *Manager) scanInstance(row scannable) (*Instance, error) {
 		_ = json.Unmarshal(metaBytes, &inst.Metadata)
 	}
 	return &inst, nil
+}
+
+// SetChatSeguro configures Chatwoot on both the product Instance and AstraCalls Session.
+func (m *Manager) SetChatSeguro(ctx context.Context, tenantID, id string, inboxID int, configJSON string) error {
+	inst, err := m.Get(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+
+	// 1. Update instances table
+	query := `UPDATE instances SET chatseguro_inbox_id = $1, updated_at = $2 WHERE id = $3`
+	_, err = m.db.ExecContext(ctx, query, strconv.Itoa(inboxID), time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+
+	// 2. Set config in Session via SessionController
+	return m.sc.SetChatwootConfig(ctx, inst.SessionID, configJSON)
+}
+
+// DeleteChatSeguro removes the Chatwoot mapping from the Instance and Session.
+func (m *Manager) DeleteChatSeguro(ctx context.Context, tenantID, id string) error {
+	inst, err := m.Get(ctx, tenantID, id)
+	if err != nil {
+		return err
+	}
+
+	// 1. Clear in instances table
+	query := `UPDATE instances SET chatseguro_inbox_id = '', updated_at = $1 WHERE id = $2`
+	_, err = m.db.ExecContext(ctx, query, time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+
+	// 2. Remove config in Session via SessionController
+	return m.sc.DeleteChatwootConfig(ctx, inst.SessionID)
 }

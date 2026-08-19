@@ -12,6 +12,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	aigateway "wacalls/internal/ai/gateway"
+	"wacalls/internal/platform/instance"
 )
 
 type SessionManager struct {
@@ -23,6 +24,7 @@ type SessionManager struct {
 	log       *slog.Logger
 	maxCalls  int
 	aiGateway *aigateway.VoiceGateway // AI layer gateway
+	instanceMgr *instance.Manager     // Instance manager reference
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
@@ -297,4 +299,54 @@ func (m *SessionManager) disconnectAll() {
 	for _, s := range all {
 		s.shutdown()
 	}
+}
+
+// CreateSession adapts to Create for instance controller interface.
+func (m *SessionManager) CreateSession(name string) (string, error) {
+	return m.Create(name)
+}
+
+// DeleteSession adapts to Delete for instance controller interface.
+func (m *SessionManager) DeleteSession(ctx context.Context, id string) error {
+	return m.Delete(ctx, id)
+}
+
+// LogoutSession adapts to Logout for instance controller interface.
+func (m *SessionManager) LogoutSession(ctx context.Context, id string) error {
+	return m.Logout(ctx, id)
+}
+
+// GetActiveCallsCount returns the dynamic call registry count.
+func (m *SessionManager) GetActiveCallsCount(id string) int {
+	m.mu.RLock()
+	s, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return s.reg.count()
+}
+
+// SetChatwootConfig sets the Chatwoot settings on a running session and saves it to the DB.
+func (m *SessionManager) SetChatwootConfig(ctx context.Context, sessionID string, configJSON string) error {
+	s, ok := m.Get(sessionID)
+	if !ok {
+		return fmt.Errorf("whatsapp session not found")
+	}
+	var config ChatwootConfig
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		return fmt.Errorf("invalid chatwoot payload: %w", err)
+	}
+	s.setChatwoot(config)
+	return m.store.setChatwoot(ctx, sessionID, configJSON)
+}
+
+// DeleteChatwootConfig clears the Chatwoot settings from a session and removes it from the DB.
+func (m *SessionManager) DeleteChatwootConfig(ctx context.Context, sessionID string) error {
+	s, ok := m.Get(sessionID)
+	if !ok {
+		return fmt.Errorf("whatsapp session not found")
+	}
+	s.setChatwoot(ChatwootConfig{})
+	return m.store.deleteChatwoot(ctx, sessionID)
 }
