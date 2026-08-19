@@ -1,4 +1,4 @@
-/docs
+# /docs (kept versioned for audit and baseline docs)
 /wacalls-server.exe
 /wacalls.exe
 run-mlow.ps1
