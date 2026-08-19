@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -76,14 +77,30 @@ func getBrowserAPI(log *slog.Logger) *webrtc.API {
 	return browserAPI
 }
 
+// h264ChannelLabel is the data channel the browser opens to carry H264 access
+// units for video calls in both directions. The browser side must create it with
+// this label. (Audio uses the Opus RTP media track, not a data channel.)
+const h264ChannelLabel = "h264"
+
 type Bridge struct {
 	pc         *webrtc.PeerConnection
 	localTrack *webrtc.TrackLocalStaticSample
+	videoDC    atomic.Pointer[webrtc.DataChannel]
 	log        *slog.Logger
 
-	OnBrowserRTP  func(payload []byte)
+	OnBrowserRTP func(payload []byte)
+	// OnBrowserVideo is invoked with H264 access units captured from the browser camera.
+	OnBrowserVideo func(au []byte)
+	// OnTerminalICE fires when the peer connection fails or closes.
 	OnTerminalICE func()
+	// terminateDisabled silencia o OnTerminalICE. Usado ao TROCAR a ponte (ex.:
+	// renegociação ou transferência): fechar a ponte antiga não deve encerrar a
+	// chamada, pois a nova ponte assume o mesmo leg.
+	terminateDisabled atomic.Bool
 }
+
+// DisableTerminate impede que o fechamento desta ponte dispare OnTerminalICE.
+func (b *Bridge) DisableTerminate() { b.terminateDisabled.Store(true) }
 
 func NewBridge(offerSDP string, log *slog.Logger) (*Bridge, string, error) {
 	pc, err := getBrowserAPI(log).NewPeerConnection(webrtc.Configuration{})
@@ -123,10 +140,24 @@ func NewBridge(offerSDP string, log *slog.Logger) (*Bridge, string, error) {
 		}()
 	})
 
+	// Video: the browser opens an "h264" data channel carrying H264 access units
+	// in both directions. Audio stays on the Opus RTP media track above.
+	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		if dc.Label() != h264ChannelLabel {
+			return
+		}
+		br.videoDC.Store(dc)
+		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+			if cb := br.OnBrowserVideo; cb != nil && len(msg.Data) > 0 {
+				cb(msg.Data)
+			}
+		})
+	})
+
 	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
 		log.Debug("browser ice state", "state", s.String())
 		if s == webrtc.ICEConnectionStateFailed || s == webrtc.ICEConnectionStateClosed {
-			if br.OnTerminalICE != nil {
+			if br.OnTerminalICE != nil && !br.terminateDisabled.Load() {
 				br.OnTerminalICE()
 			}
 		}
@@ -160,6 +191,14 @@ func (b *Bridge) WriteOpus(payload []byte, dur time.Duration) error {
 		return nil
 	}
 	return b.localTrack.WriteSample(media.Sample{Data: payload, Duration: dur})
+}
+
+func (b *Bridge) WriteVideo(au []byte) error {
+	dc := b.videoDC.Load()
+	if dc == nil || len(au) == 0 {
+		return nil
+	}
+	return dc.Send(au)
 }
 
 func (b *Bridge) Close() {

@@ -7,6 +7,7 @@ import { CallsPage } from "@/pages/CallsPage";
 import { SessionPairing } from "@/components/domain/session/SessionPairing";
 import { SessionHeader } from "@/components/domain/session/SessionHeader";
 import { IncomingCallModal } from "@/components/domain/call/IncomingCallModal";
+import { TransferOfferModal } from "@/components/domain/call/TransferOfferModal";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ensureSessionsWired, useSessions } from "@/stores/sessions";
 import { ensureCallsWired } from "@/stores/calls";
@@ -30,8 +31,8 @@ export const App = () => {
         {sessions.length === 0 ? (
           <EmptyState
             icon={<PlusCircle className="h-6 w-6" />}
-            title="No accounts yet"
-            description="Create your first WhatsApp account from the sidebar to start calling."
+            title="Nenhuma conta ainda"
+            description="Crie sua primeira conta de WhatsApp na barra lateral para começar a ligar."
           />
         ) : active ? (
           <div className="space-y-6">
@@ -39,10 +40,11 @@ export const App = () => {
             {active.paired ? <CallsPage sid={active.id} /> : <SessionPairing session={active} />}
           </div>
         ) : (
-          <EmptyState title="Select an account" description="Choose an account from the sidebar." />
+          <EmptyState title="Selecione uma conta" description="Escolha uma conta na barra lateral." />
         )}
       </AppShell>
       <IncomingCallModal />
+      <TransferOfferModal />
       <Toaster theme={theme} position="top-right" richColors closeButton />
     </TooltipProvider>
   );

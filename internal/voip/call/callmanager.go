@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-	"time"
+	callvideo "wacalls/internal/voip/call/video"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/media"
 	"wacalls/internal/voip/signaling"
@@ -30,22 +30,37 @@ type CallManager struct {
 	peerSsrcs     []uint32
 	actualPeerSet bool
 
+	video *callvideo.Pipeline
+
 	firstPacketSent       bool
 	initialTransportSent  bool
 	outgoingPreacceptSent bool
 	acceptedByJid         string
+	calleeDevices         []types.JID
 	debeEnabled           bool
 
-	encodeBuf    []float32
-	encodeBufPos int
+	captureBuf   []float32
+	sendLoopStop chan struct{}
 
-	lastCaptureAt time.Time
-	keepaliveStop chan struct{}
+	// Estado de espera (hold). Enquanto held, o áudio do atendente não é enviado:
+	// no lugar vai música de espera (mohEnabled) ou silêncio, e o áudio do peer não
+	// é encaminhado ao navegador. O leg segue vivo (media-level, sem sinalizar mute).
+	held       bool
+	mohEnabled bool
+	mohPos     int
+
+	audioTimelineSet   bool
+	audioBaseTs        uint32
+	audioPlayedSamples uint64
 
 	OnStateChange func(*CallInfo)
 	OnIncoming    func(*CallInfo)
 	OnEnded       func(*CallInfo)
 	OnPeerAudio   func([]float32)
+	OnPeerVideo   func([]byte)
+
+	OnVideoUpgradeRequest func(*CallInfo) // o peer pediu um upgrade p/ vídeo
+	OnVideoStateChanged   func(*CallInfo) // qualquer mudança no estado de vídeo
 }
 
 func NewCallManager(sock core.VoipSocket, log *slog.Logger) *CallManager {
@@ -61,6 +76,12 @@ func NewCallManager(sock core.VoipSocket, log *slog.Logger) *CallManager {
 	relay.SetOnConnected(func(ip string, port int) { m.onRelayConnected() })
 	relay.SetOnReceive(func(data []byte) { m.onRelayData(data) })
 	m.relay = relay
+	m.video = callvideo.New(log, relay)
+	m.video.OnFrame = func(au []byte) {
+		if m.OnPeerVideo != nil {
+			m.OnPeerVideo(au)
+		}
+	}
 	return m
 }
 
@@ -68,6 +89,42 @@ func (m *CallManager) CurrentCall() *CallInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.currentCall
+}
+
+// Hold coloca a chamada ativa em espera. O leg permanece vivo: paramos de enviar o
+// áudio do atendente (enviando música de espera se moh=true, senão silêncio) e de
+// encaminhar o áudio do peer ao navegador. Não sinaliza mute ao WhatsApp de propósito,
+// para o interlocutor continuar recebendo mídia (a música).
+func (m *CallManager) Hold(moh bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.currentCall == nil {
+		return &CallError{"no active call"}
+	}
+	if err := m.currentCall.ApplyTransition(Transition{Type: TransitionHold}); err != nil {
+		return err
+	}
+	m.held = true
+	m.mohEnabled = moh
+	m.mohPos = 0
+	m.emitState()
+	return nil
+}
+
+// Resume tira a chamada da espera e volta a enviar/receber o áudio normalmente.
+func (m *CallManager) Resume() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.currentCall == nil {
+		return &CallError{"no active call"}
+	}
+	if err := m.currentCall.ApplyTransition(Transition{Type: TransitionResume}); err != nil {
+		return err
+	}
+	m.held = false
+	m.mohEnabled = false
+	m.emitState()
+	return nil
 }
 
 func (m *CallManager) emitState() {
@@ -107,12 +164,13 @@ func (m *CallManager) StartCall(ctx context.Context, callID string, peerJid type
 	m.initCodec()
 	m.mu.Unlock()
 
-	offer, err := signaling.BuildOfferStanza(ctx, m.sock, callID, callKey, resolved, isVideo)
+	offer, calleeDevices, err := signaling.BuildOfferStanza(ctx, m.sock, callID, callKey, resolved, isVideo)
 	if err != nil {
 		return err
 	}
 
 	m.mu.Lock()
+	m.calleeDevices = calleeDevices
 	_ = m.currentCall.ApplyTransition(Transition{Type: TransitionOfferSent})
 	m.emitState()
 	m.mu.Unlock()

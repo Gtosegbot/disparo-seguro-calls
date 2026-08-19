@@ -22,36 +22,12 @@ func (m *CallManager) initCodec() {
 func (m *CallManager) FeedCapturedPCM(data []float32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.codec == nil || m.rtpSession == nil || m.srtpSession == nil || !m.relay.HasConnection() {
+	if m.codec == nil || len(data) == 0 {
 		return
 	}
-	m.lastCaptureAt = time.Now()
-	frameSize := m.codec.FrameSize()
-	if m.encodeBuf == nil {
-		m.encodeBuf = make([]float32, frameSize)
-		m.encodeBufPos = 0
-	}
-
-	offset := 0
-	for offset < len(data) {
-		toCopy := min(len(data)-offset, frameSize-m.encodeBufPos)
-		copy(m.encodeBuf[m.encodeBufPos:], data[offset:offset+toCopy])
-		m.encodeBufPos += toCopy
-		offset += toCopy
-		if m.encodeBufPos < frameSize {
-			break
-		}
-		frame := make([]float32, frameSize)
-		copy(frame, m.encodeBuf)
-		m.encodeBufPos = 0
-
-		opus, err := m.codec.Encode(frame)
-		if err != nil {
-			m.log.Debug("encode error", "err", err)
-			continue
-		}
-		m.sendOpusFrameLocked(opus)
+	m.captureBuf = append(m.captureBuf, data...)
+	if maxBuffered := m.codec.FrameSize() * 4; len(m.captureBuf) > maxBuffered {
+		m.captureBuf = m.captureBuf[len(m.captureBuf)-maxBuffered:]
 	}
 }
 
@@ -76,12 +52,12 @@ func (m *CallManager) sendOpusFrameLocked(opus []byte) {
 	m.relay.Broadcast(srtp)
 }
 
-func (m *CallManager) startSilenceKeepaliveLocked() {
-	if m.keepaliveStop != nil || m.codec == nil {
+func (m *CallManager) startMediaSendLoopLocked() {
+	if m.sendLoopStop != nil || m.codec == nil {
 		return
 	}
 	stop := make(chan struct{})
-	m.keepaliveStop = stop
+	m.sendLoopStop = stop
 	frameSize := m.codec.FrameSize()
 	go func() {
 		ticker := time.NewTicker(60 * time.Millisecond)
@@ -92,18 +68,48 @@ func (m *CallManager) startSilenceKeepaliveLocked() {
 			case <-stop:
 				return
 			case <-ticker.C:
-				m.mu.Lock()
-				ready := m.codec != nil && m.rtpSession != nil && m.srtpSession != nil && m.relay.HasConnection()
-				idle := time.Since(m.lastCaptureAt) > 120*time.Millisecond
-				if ready && idle {
-					if opus, err := m.codec.Encode(silence); err == nil {
-						m.sendOpusFrameLocked(opus)
-					}
-				}
-				m.mu.Unlock()
 			}
+			m.mu.Lock()
+			if m.codec == nil || m.rtpSession == nil || m.srtpSession == nil || !m.relay.HasConnection() {
+				m.mu.Unlock()
+				continue
+			}
+			frame := silence
+			switch {
+			case m.held:
+				// Em espera: não envia o mic do atendente. Toca música de espera
+				// (ou silêncio) para o interlocutor manter o leg vivo.
+				if m.mohEnabled {
+					frame = m.nextMohFrameLocked(frameSize)
+				}
+			case len(m.captureBuf) >= frameSize:
+				frame = make([]float32, frameSize)
+				copy(frame, m.captureBuf[:frameSize])
+				m.captureBuf = m.captureBuf[frameSize:]
+			}
+			if opus, err := m.codec.Encode(frame); err == nil {
+				m.sendOpusFrameLocked(opus)
+			}
+			m.mu.Unlock()
 		}
 	}()
+}
+
+// nextMohFrameLocked devolve o próximo quadro (frameSize amostras) do loop de música
+// de espera, avançando a posição. Deve ser chamado com m.mu travado.
+func (m *CallManager) nextMohFrameLocked(frameSize int) []float32 {
+	frame := make([]float32, frameSize)
+	if len(mohLoop) == 0 {
+		return frame
+	}
+	for i := 0; i < frameSize; i++ {
+		frame[i] = mohLoop[m.mohPos]
+		m.mohPos++
+		if m.mohPos >= len(mohLoop) {
+			m.mohPos = 0
+		}
+	}
+	return frame
 }
 
 func (m *CallManager) onRelayData(data []byte) {
@@ -116,17 +122,21 @@ func (m *CallManager) onRelayData(data []byte) {
 	if len(data) < 12 {
 		return
 	}
-	pt := data[1] & 0x7f
-	if pt != core.PayloadTypeWhatsAppOpus {
-		return
+	switch data[1] & 0x7f {
+	case core.PayloadTypeWhatsAppOpus:
+		m.handleAudioRelayData(data)
+	case core.PayloadTypeWhatsAppH264:
+		m.video.HandleRelayData(data)
 	}
+}
 
+func (m *CallManager) handleAudioRelayData(data []byte) {
 	m.mu.Lock()
 	if m.srtpSession == nil || m.codec == nil {
 		m.mu.Unlock()
 		return
 	}
-	ssrc := uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11])
+	ssrc := media.RTPSsrc(data)
 	if ssrc == m.selfSsrc {
 		m.mu.Unlock()
 		return
@@ -141,6 +151,7 @@ func (m *CallManager) onRelayData(data []byte) {
 	}
 	srtp := m.srtpSession
 	codec := m.codec
+	held := m.held
 	m.mu.Unlock()
 
 	pkt, err := srtp.Unprotect(data)
@@ -152,11 +163,41 @@ func (m *CallManager) onRelayData(data []byte) {
 		return
 	}
 	pcm, err := codec.Decode(pkt.Payload)
-	if err != nil {
+	if err != nil || len(pcm) == 0 {
 		return
 	}
-	pcm = media.NormalizeFrame(pcm, codec.FrameSize())
-	if m.OnPeerAudio != nil {
-		m.OnPeerAudio(pcm)
+	if held {
+		// Em espera: não encaminha o áudio do peer ao navegador do atendente.
+		return
 	}
+	if m.OnPeerAudio != nil {
+		m.OnPeerAudio(m.alignPeerAudio(pkt.Header.Timestamp, pcm))
+	}
+}
+
+func (m *CallManager) alignPeerAudio(ts uint32, pcm []float32) []float32 {
+	const maxGapSamples = 8000
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	origLen := uint64(len(pcm))
+	if !m.audioTimelineSet {
+		m.audioTimelineSet = true
+		m.audioBaseTs = ts
+		m.audioPlayedSamples = origLen
+		return pcm
+	}
+	target := uint64(ts - m.audioBaseTs)
+	gap := int64(target) - int64(m.audioPlayedSamples)
+	if gap < 0 || gap > maxGapSamples {
+		m.audioBaseTs = ts
+		m.audioPlayedSamples = origLen
+		return pcm
+	}
+	if gap > 0 {
+		padded := make([]float32, int(gap)+int(origLen))
+		copy(padded[int(gap):], pcm)
+		pcm = padded
+	}
+	m.audioPlayedSamples = target + origLen
+	return pcm
 }

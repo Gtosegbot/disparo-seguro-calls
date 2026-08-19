@@ -10,6 +10,7 @@ type CallListRow = {
   peer: string;
   startedAt: number;
   status: CallStatus;
+  held?: boolean;
   endedAt?: number;
   endReason?: string;
 };
@@ -17,12 +18,24 @@ type CallListRow = {
 export type BrokerEvent =
   | { type: "session-list"; sessions: SessionInfo[] }
   | { type: "session-qr"; sessionId: string; qr: string }
-  | { type: "auth-state"; sessionId: string; paired: boolean; state: SessionState; qr?: string }
+  | { type: "auth-state"; sessionId: string; paired: boolean; state: SessionState; qr?: string; code?: string; passkey?: unknown }
   | { type: "call-list"; calls: CallListRow[] }
-  | { type: "call-status"; sessionId: string; id: string; owner: string | null; status: CallStatus; peer: string; startedAt: number }
+  | { type: "call-status"; sessionId: string; id: string; owner: string | null; status: CallStatus; peer: string; startedAt: number; held?: boolean }
   | { type: "call-ended"; sessionId: string; id: string; owner: string | null; reason: string; endedAt: number }
-  | { type: "incoming"; sessionId: string; id: string; peer: string; offeredAt: number }
-  | { type: "incoming-claimed"; sessionId: string; id: string; owner: string };
+  | { type: "incoming"; sessionId: string; id: string; peer: string; video: boolean; offeredAt: number }
+  | { type: "incoming-claimed"; sessionId: string; id: string; owner: string }
+  | { type: "call-transfer-offer"; sessionId: string; id: string; peer: string; from: string; offeredAt: number }
+  | { type: "call-transfer-claimed"; sessionId: string; id: string; owner: string }
+  | {
+      type: "video-state";
+      sessionId: string;
+      id: string;
+      kind: "upgrade-request" | "state";
+      peerVideo: boolean;
+      localVideo: boolean;
+      upgradeIncoming: boolean;
+      upgradeOutgoing: boolean;
+    };
 
 type Listener = (ev: BrokerEvent) => void;
 

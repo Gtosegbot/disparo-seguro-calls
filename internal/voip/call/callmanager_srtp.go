@@ -42,6 +42,13 @@ func (m *CallManager) initSrtpKeysLocked() {
 	}
 	m.srtpSession = sess
 	m.log.Debug("srtp per-jid keys set", "send", ourDeviceJid, "recv", peerDeviceJid)
+
+	// Vídeo compartilha as chaves E2E do áudio e é keyado desde já — mesmo numa call
+	// que nasceu só de áudio — para permitir um upgrade mid-call sem renegociar SRTP.
+	// Modelo "sempre monta, fica gated": a pipeline só envia quando há frame capturado.
+	if err := m.video.Setup(call.CallID, ourDeviceJid, peerDeviceJid, sendKM, recvKM); err != nil {
+		m.log.Error("video setup failed", "err", err)
+	}
 }
 
 func (m *CallManager) reinitSrtpLocked(peerKey []byte, peerJid types.JID) {

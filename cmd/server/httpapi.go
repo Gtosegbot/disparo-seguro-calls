@@ -10,6 +10,7 @@ import (
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/media"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -23,10 +24,21 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{sid}", s.handleSessionDelete)
 	mux.HandleFunc("POST /api/sessions/{sid}/logout", s.handleSessionLogout)
 	mux.HandleFunc("POST /api/sessions/{sid}/pair", s.handleSessionPair)
+	mux.HandleFunc("POST /api/sessions/{sid}/pair-code", s.handleSessionPairCode)
+	mux.HandleFunc("POST /api/sessions/{sid}/pair-passkey", s.handlePairPasskey)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls", s.handleStartCall)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/fake", s.handleFakeCall)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/webrtc", s.handleWebRTC)
+	// Rota WebSocket de mídia — funciona atrás de proxy reverso HTTP (Cloudflare etc.)
+	// O browser envia/recebe PCM Int16 LE 16 kHz via WSS/443 em vez de WebRTC/UDP.
+	mux.HandleFunc("GET /api/sessions/{sid}/calls/{id}/ws", s.handleWSBridge)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/accept", s.handleAccept)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/reject", s.handleReject)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/video/{action}", s.handleCallVideo)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/hold", s.handleHold)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/resume", s.handleResume)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/transfer", s.handleTransfer)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/pickup", s.handlePickup)
 	mux.HandleFunc("DELETE /api/sessions/{sid}/calls/{id}", s.handleEndCall)
 	mux.HandleFunc("GET /api/sessions/{sid}/history", s.handleHistory)
 
@@ -36,6 +48,94 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{sid}/messages/audio", s.handleSendAudio)
 	mux.HandleFunc("POST /api/sessions/{sid}/messages/video", s.handleSendVideo)
 	mux.HandleFunc("POST /api/sessions/{sid}/messages/document", s.handleSendDocument)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/sticker", s.handleSendSticker)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/location", s.handleSendLocation)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/contact", s.handleSendContact)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/poll", s.handleSendPoll)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/pix", s.handleSendPix)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/product", s.handleSendProduct)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/product-native", s.handleSendProductNative)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/link-preview", s.handleSendLinkPreview)
+	mux.HandleFunc("PUT /api/sessions/{sid}/messages/react", s.handleReact)
+	mux.HandleFunc("PUT /api/sessions/{sid}/messages/edit", s.handleEditMessage)
+	mux.HandleFunc("DELETE /api/sessions/{sid}/messages", s.handleDeleteMessage)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/seen", s.handleMarkSeen)
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/typing", s.handleTyping)
+
+	// Contatos (whatsmeow)
+	mux.HandleFunc("GET /api/sessions/{sid}/contacts/check", s.handleCheckNumber)
+	mux.HandleFunc("GET /api/sessions/{sid}/contacts", s.handleListContacts)
+	mux.HandleFunc("GET /api/sessions/{sid}/contacts/{jid}", s.handleContactInfo)
+	mux.HandleFunc("GET /api/sessions/{sid}/contacts/{jid}/picture", s.handleContactPicture)
+	mux.HandleFunc("POST /api/sessions/{sid}/contacts/{jid}/block", s.handleBlock(true))
+	mux.HandleFunc("POST /api/sessions/{sid}/contacts/{jid}/unblock", s.handleBlock(false))
+	mux.HandleFunc("GET /api/sessions/{sid}/blocklist", s.handleBlocklist)
+
+	// Grupos (whatsmeow)
+	mux.HandleFunc("POST /api/sessions/{sid}/groups", s.handleCreateGroup)
+	mux.HandleFunc("GET /api/sessions/{sid}/groups", s.handleListGroups)
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/join", s.handleJoinGroup)
+	mux.HandleFunc("GET /api/sessions/{sid}/groups/join-info", s.handleGroupJoinInfo)
+	mux.HandleFunc("GET /api/sessions/{sid}/groups/{gid}", s.handleGroupInfo)
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/leave", s.handleLeaveGroup)
+	mux.HandleFunc("GET /api/sessions/{sid}/groups/{gid}/participants", s.handleGroupParticipants)
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/participants/add", s.handleGroupParticipantChange(whatsmeow.ParticipantChangeAdd))
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/participants/remove", s.handleGroupParticipantChange(whatsmeow.ParticipantChangeRemove))
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/participants/promote", s.handleGroupParticipantChange(whatsmeow.ParticipantChangePromote))
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/participants/demote", s.handleGroupParticipantChange(whatsmeow.ParticipantChangeDemote))
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/subject", s.handleGroupSubject)
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/description", s.handleGroupDescription)
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/picture", s.handleGroupPicture)
+	mux.HandleFunc("GET /api/sessions/{sid}/groups/{gid}/invite", s.handleGroupInvite)
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/invite/revoke", s.handleGroupInviteRevoke)
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/settings/announce", s.handleGroupAnnounce)
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/settings/locked", s.handleGroupLocked)
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/settings/approval", s.handleGroupApprovalMode)
+	mux.HandleFunc("PUT /api/sessions/{sid}/groups/{gid}/settings/add-mode", s.handleGroupAddMode)
+	mux.HandleFunc("GET /api/sessions/{sid}/groups/{gid}/requests", s.handleGroupRequests)
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/requests/approve", s.handleGroupRequestChange(whatsmeow.ParticipantChangeApprove))
+	mux.HandleFunc("POST /api/sessions/{sid}/groups/{gid}/requests/reject", s.handleGroupRequestChange(whatsmeow.ParticipantChangeReject))
+
+	// Canais / Newsletters (whatsmeow)
+	mux.HandleFunc("GET /api/sessions/{sid}/channels", s.handleListChannels)
+	mux.HandleFunc("GET /api/sessions/{sid}/channels/{id}", s.handleChannelInfo)
+	mux.HandleFunc("GET /api/sessions/{sid}/channels/{id}/messages", s.handleChannelMessages)
+	mux.HandleFunc("POST /api/sessions/{sid}/channels/{id}/follow", s.handleChannelFollow(true))
+	mux.HandleFunc("POST /api/sessions/{sid}/channels/{id}/unfollow", s.handleChannelFollow(false))
+	mux.HandleFunc("POST /api/sessions/{sid}/channels/{id}/mute", s.handleChannelMute(true))
+	mux.HandleFunc("POST /api/sessions/{sid}/channels/{id}/unmute", s.handleChannelMute(false))
+
+	// Presença
+	mux.HandleFunc("POST /api/sessions/{sid}/presence", s.handleSetPresence)
+	mux.HandleFunc("POST /api/sessions/{sid}/presence/{jid}/subscribe", s.handleSubscribePresence)
+
+	// Perfil próprio
+	mux.HandleFunc("GET /api/sessions/{sid}/profile", s.handleGetProfile)
+	mux.HandleFunc("PUT /api/sessions/{sid}/profile/status", s.handleSetProfileStatus)
+	mux.HandleFunc("GET /api/sessions/{sid}/profile/qr", s.handleContactQR)
+
+	// Privacidade da conta
+	mux.HandleFunc("GET /api/sessions/{sid}/privacy", s.handleGetPrivacy)
+	mux.HandleFunc("PUT /api/sessions/{sid}/privacy", s.handleSetPrivacy)
+	mux.HandleFunc("GET /api/sessions/{sid}/privacy/status", s.handleGetStatusPrivacy)
+
+	// Mensagens temporárias (disappearing)
+	mux.HandleFunc("PUT /api/sessions/{sid}/disappearing", s.handleSetDefaultDisappearing)
+	mux.HandleFunc("PUT /api/sessions/{sid}/chats/{chatId}/disappearing", s.handleSetChatDisappearing)
+
+	// Perfil comercial (business) de um contato
+	mux.HandleFunc("GET /api/sessions/{sid}/contacts/{jid}/business", s.handleBusinessProfile)
+
+	// Status / Stories
+	mux.HandleFunc("POST /api/sessions/{sid}/status/text", s.handleStatusText)
+	mux.HandleFunc("POST /api/sessions/{sid}/status/image", s.handleStatusImage)
+	mux.HandleFunc("POST /api/sessions/{sid}/status/video", s.handleStatusVideo)
+	mux.HandleFunc("POST /api/sessions/{sid}/status/audio", s.handleStatusAudio)
+
+	// Histórico de conversas/mensagens
+	mux.HandleFunc("GET /api/sessions/{sid}/chats", s.handleListChats)
+	mux.HandleFunc("GET /api/sessions/{sid}/chats/{chatId}/messages", s.handleChatMessages)
+	mux.HandleFunc("GET /api/sessions/{sid}/messages", s.handleQueryMessages)
 
 	// Webhook por sessão (recebimento -> Chatwoot etc.)
 	mux.HandleFunc("POST /api/sessions/{sid}/webhook", s.handleSetWebhook)
@@ -48,6 +148,26 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{sid}/chatwoot", s.handleDeleteChatwoot)
 	mux.HandleFunc("POST /api/sessions/{sid}/chatwoot/webhook", s.handleChatwootWebhook)
 	mux.HandleFunc("GET /api/chatwoot/resolve", s.handleChatwootResolve)
+	// Abrir sob demanda uma conversa de grupo/canal no Chatwoot
+	mux.HandleFunc("POST /api/sessions/{sid}/chatwoot/groups/{gid}/open", s.handleChatwootOpenGroup)
+	mux.HandleFunc("POST /api/sessions/{sid}/chatwoot/channels/{id}/open", s.handleChatwootOpenChannel)
+
+	// Gravação de chamadas (opt-in por sessão)
+	mux.HandleFunc("GET /api/sessions/{sid}/recording", s.handleGetRecording)
+	mux.HandleFunc("PUT /api/sessions/{sid}/recording", s.handleSetRecording)
+	// Proxy de saída por sessão (http/https/socks5)
+	mux.HandleFunc("GET /api/sessions/{sid}/proxy", s.handleGetProxy)
+	mux.HandleFunc("PUT /api/sessions/{sid}/proxy", s.handleSetProxy)
+	// Votar numa enquete recebida
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/poll-vote", s.handlePollVote)
+	// Responder (RSVP) um evento recebido
+	mux.HandleFunc("POST /api/sessions/{sid}/messages/event-response", s.handleEventResponse)
+	// Disparo em massa de ligações com áudio pré-gravado
+	mux.HandleFunc("POST /api/sessions/{sid}/broadcast", s.handleBroadcast)
+	mux.HandleFunc("GET /api/sessions/{sid}/broadcast/{cid}", s.handleBroadcastStatus)
+	// MP3 finalizado — rota pública (fora de /api/, sem API key): o id é
+	// não-enumerável e atua como capability.
+	mux.HandleFunc("GET /recordings/{id}", s.handleRecording)
 
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 
@@ -58,7 +178,7 @@ func (s *server) routes() http.Handler {
 	}
 	var handler http.Handler = mux
 	if key := os.Getenv("WACALLS_API_KEY"); key != "" {
-		handler = withAuth(handler, key)
+		handler = withAuth(handler, key, os.Getenv("WACALLS_WIDGET_KEY"))
 	}
 	return withCORS(handler)
 }
@@ -67,7 +187,7 @@ func withCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Client-Id, X-API-Key")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -79,7 +199,14 @@ func withCORS(h http.Handler) http.Handler {
 // withAuth protege as rotas /api/* com uma API key (header X-API-Key ou ?apiKey=).
 // Exceções: o webhook do Chatwoot (chamado externamente pelo próprio Chatwoot)
 // e os arquivos estáticos do painel (precisam carregar a tela de login).
-func withAuth(h http.Handler, key string) http.Handler {
+//
+// Segurança (issue #10): a chave-MESTRA (key) libera tudo; a chave de WIDGET
+// (widgetKey, opcional) libera SÓ a superfície que o widget do Chatwoot precisa
+// (resolve, eventos SSE e operações de chamada). Como o widget expõe a chave no
+// data-api-key/URL do EventSource, usar a de widget limita o estrago se ela
+// vazar: quem a pega NÃO consegue listar/apagar sessões, mandar mensagens nem
+// mexer na config do Chatwoot.
+func withAuth(h http.Handler, key, widgetKey string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		guarded := strings.HasPrefix(p, "/api/") && !strings.HasSuffix(p, "/chatwoot/webhook")
@@ -88,13 +215,31 @@ func withAuth(h http.Handler, key string) http.Handler {
 			if got == "" {
 				got = r.URL.Query().Get("apiKey")
 			}
-			if got != key {
+			ok := got == key || (widgetKey != "" && got == widgetKey && widgetAllowed(r))
+			if !ok {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// widgetAllowed diz se a rota faz parte da superfície mínima do widget do
+// Chatwoot — a única coisa que a chave de widget (WACALLS_WIDGET_KEY) autoriza.
+func widgetAllowed(r *http.Request) bool {
+	p := r.URL.Path
+	switch {
+	case p == "/api/events": // SSE de chamadas
+		return true
+	case r.Method == http.MethodGet && p == "/api/chatwoot/resolve": // nome/telefone do contato
+		return true
+	// operações de chamada: iniciar, atender/recusar, webrtc, vídeo, encerrar
+	// (/api/sessions/{sid}/calls e abaixo). Não abre a gestão de sessões em si.
+	case strings.HasPrefix(p, "/api/sessions/") && strings.Contains(p, "/calls"):
+		return true
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -120,7 +265,9 @@ func (s *server) sessionByID(w http.ResponseWriter, sid string) *Session {
 }
 
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	s.broker.serveSSE(w, r, clientID(r))
+	// accountId (opcional) escopa os eventos de chamada por conta do Chatwoot: o
+	// widget do Chatwoot passa a conta dele; o painel admin não passa e recebe tudo.
+	s.broker.serveSSE(w, r, clientID(r), asInt(r.URL.Query().Get("accountId")))
 }
 
 func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -185,9 +332,32 @@ func (s *server) handleSessionPair(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// POST /api/sessions/{sid}/pair-code {phone}  → pareamento por código (sem QR)
+func (s *server) handleSessionPairCode(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Phone string `json:"phone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || strings.TrimSpace(b.Phone) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone required"})
+		return
+	}
+	code, err := s.sessions.PairPhone(r.PathValue("sid"), normalizePhone(b.Phone))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"code": code})
+}
+
 func (s *server) handleStartCall(w http.ResponseWriter, r *http.Request) {
 	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
 		s.doStartCall(sess, w, r)
+	}
+}
+
+func (s *server) handleFakeCall(w http.ResponseWriter, r *http.Request) {
+	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
+		s.doFakeCall(sess, w, r)
 	}
 }
 
@@ -215,6 +385,144 @@ func (s *server) handleEndCall(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleCallVideo controla a negociação de vídeo mid-call numa chamada ativa.
+// action ∈ {request, accept, reject, stop}: pedir upgrade p/ vídeo, aceitar/recusar
+// um pedido recebido, ou desligar o vídeo (downgrade p/ áudio).
+func (s *server) handleCallVideo(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	ac, ok := sess.reg.get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	var err error
+	switch action := r.PathValue("action"); action {
+	case "request":
+		err = ac.cm.RequestVideoUpgrade(r.Context())
+	case "accept":
+		err = ac.cm.AcceptVideoUpgrade(r.Context())
+	case "reject":
+		err = ac.cm.RejectVideoUpgrade(r.Context())
+	case "stop":
+		err = ac.cm.StopVideo(r.Context())
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown video action"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleHold coloca uma chamada ativa em espera. Body opcional {"moh": true} liga a
+// música de espera para o interlocutor (padrão: true). O leg segue vivo.
+func (s *server) handleHold(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	ac, ok := sess.reg.get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	moh := true // por padrão toca música de espera
+	var body struct {
+		MOH *bool `json:"moh"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) == nil && body.MOH != nil {
+		moh = *body.MOH
+	}
+	if err := ac.cm.Hold(moh); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "held": true, "moh": moh})
+}
+
+// handleResume tira uma chamada da espera e volta a enviar/receber o áudio.
+func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	ac, ok := sess.reg.get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	if err := ac.cm.Resume(); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "held": false})
+}
+
+// handleTransfer faz uma transferência CEGA de uma chamada ativa para outro atendente:
+// põe a chamada em espera com música (o interlocutor não fica no silêncio), libera o
+// dono e re-oferece a chamada. Body opcional {"to":"<clientId>"} mira um atendente
+// específico; sem ele, a oferta vai a todos os atendentes da conta (fila).
+// O leg do WhatsApp NÃO é tocado — só muda quem tem a ponte de áudio.
+func (s *server) handleTransfer(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	ac, ok := sess.reg.get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	var body struct {
+		To string `json:"to"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	// Melhor esforço: coloca em espera com música. Se já estiver em espera, tudo bem.
+	_ = ac.cm.Hold(true)
+
+	from := clientID(r)
+	s.broker.reassignOwner(id, nil) // libera o dono para o alvo poder assumir
+	peer := ""
+	if cr, ok := s.broker.getCall(id); ok && cr != nil {
+		peer = cr.Peer
+	}
+	s.broker.emitTransferOffer(sess.id, id, peer, from, strings.TrimSpace(body.To))
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "transferred": true, "to": strings.TrimSpace(body.To)})
+}
+
+// handlePickup assume uma chamada transferida: fixa o novo dono SEM re-aceitar no
+// WhatsApp (a chamada já está ativa). Em seguida o navegador do atendente chama
+// .../webrtc (abre a ponte, que troca automaticamente) e depois .../resume para tirar
+// da espera.
+func (s *server) handlePickup(w http.ResponseWriter, r *http.Request) {
+	sess := s.sessionByID(w, r.PathValue("sid"))
+	if sess == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if _, ok := sess.reg.get(id); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	owner := clientID(r)
+	if !s.broker.reassignOwner(id, &owner) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such call"})
+		return
+	}
+	s.broker.emitTransferClaimed(sess.id, id, owner)
+	writeJSON(w, http.StatusOK, map[string]any{"call": map[string]string{"callId": id}})
+}
+
 func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if sess := s.sessionByID(w, r.PathValue("sid")); sess != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"rows": s.broker.historyRows(sess.id, 50)})
@@ -230,6 +538,7 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 		Phone      string `json:"phone"`
 		DurationMs int    `json:"duration_ms"`
 		Record     bool   `json:"record"`
+		Video      bool   `json:"video"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Phone) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone required"})
@@ -244,7 +553,7 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 	}
 	peer := types.NewJID(normalizePhone(body.Phone), types.DefaultUserServer)
 
-	callID, err := sess.startOutgoing(r.Context(), peer, false)
+	callID, err := sess.startOutgoing(r.Context(), peer, body.Video, body.Record)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -254,6 +563,43 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 		StartedAt: time.Now().UnixMilli(), Status: StatusRinging,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"call": map[string]string{"callId": callID}})
+}
+
+// doFakeCall dispara um "toque fantasma": faz o aparelho do destinatário tocar por
+// alguns segundos (offer) e encerra (terminate), sem estabelecer áudio/vídeo. Serve
+// só para chamar atenção. Corpo: {phone, video?, duration_ms?}. duration_ms default
+// 3000, teto 30000 (evita virar chamada real longa).
+func (s *server) doFakeCall(sess *Session, w http.ResponseWriter, r *http.Request) {
+	if sess.client.Store.ID == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "not paired"})
+		return
+	}
+	var body struct {
+		Phone      string  `json:"phone"`
+		Video      bool    `json:"video"`
+		DurationMs flexInt `json:"duration_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Phone) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone required"})
+		return
+	}
+	dur := 3 * time.Second
+	if body.DurationMs.Int() > 0 {
+		dur = time.Duration(body.DurationMs.Int()) * time.Millisecond
+	}
+	if dur > 30*time.Second {
+		dur = 30 * time.Second
+	}
+	peer := types.NewJID(normalizePhone(body.Phone), types.DefaultUserServer)
+	callID, err := sess.fakeCall(r.Context(), peer, body.Video, dur)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"call":       map[string]string{"callId": callID},
+		"durationMs": dur.Milliseconds(),
+	})
 }
 
 func (s *server) doWebRTC(sess *Session, w http.ResponseWriter, r *http.Request) {
@@ -289,7 +635,12 @@ func (s *server) doWebRTC(sess *Session, w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			return
 		}
-		ac.cm.FeedCapturedPCM(media.Downsample48to16(pcm48))
+		down := media.Downsample48to16(pcm48)
+		ac.recorder.writeBrowser(down)
+		ac.cm.FeedCapturedPCM(down)
+	}
+	bridge.OnBrowserVideo = func(au []byte) {
+		ac.cm.FeedCapturedVideo(au)
 	}
 	bridge.OnTerminalICE = func() {
 		go sess.terminateCall(callID, core.EndCallReasonUserEnded)
@@ -306,10 +657,9 @@ func (s *server) doAccept(sess *Session, w http.ResponseWriter, r *http.Request)
 		return
 	}
 	owner := clientID(r)
-	if other := s.broker.ownerActiveCall(owner); other != "" && other != id {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "operator already on a call"})
-		return
-	}
+	// Antes bloqueávamos o operador de aceitar uma 2ª chamada com uma já ativa. Agora
+	// permitimos "atender em espera": o painel coloca a atual em hold e aceita a nova.
+	// Mantemos só a reivindicação de dono (evita dois clientes pegarem a mesma chamada).
 	if !s.broker.setOwner(id, owner) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "claimed by another client"})
 		return

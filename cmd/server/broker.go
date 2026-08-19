@@ -24,27 +24,35 @@ type CallRecord struct {
 	Peer      string     `json:"peer"`
 	StartedAt int64      `json:"startedAt"`
 	Status    CallStatus `json:"status"`
+	Held      bool       `json:"held"`
 	EndedAt   *int64     `json:"endedAt,omitempty"`
 	EndReason string     `json:"endReason,omitempty"`
 }
 
 type AuthSnapshot struct {
-	State  string `json:"state"`
-	Paired bool   `json:"paired"`
-	QR     string `json:"qr,omitempty"`
+	State   string          `json:"state"`
+	Paired  bool            `json:"paired"`
+	QR      string          `json:"qr,omitempty"`
+	Code    string          `json:"code,omitempty"`    // código de pareamento por telefone (8 dígitos)
+	Passkey json.RawMessage `json:"passkey,omitempty"` // desafio WebAuthn (publicKey) p/ contas com passkey
 }
 
 type SessionInfo struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	JID    string `json:"jid"`
-	State  string `json:"state"`
-	Paired bool   `json:"paired"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	JID       string `json:"jid"`
+	State     string `json:"state"`
+	Paired    bool   `json:"paired"`
+	Recording bool   `json:"recording"`
 }
 
 type subscriber struct {
 	clientID string
-	ch       chan []byte
+	// accountID é a conta do Chatwoot que este assinante representa. 0 = sem
+	// escopo (painel admin) e recebe TODOS os eventos; > 0 (widget de uma conta)
+	// recebe só os eventos de chamada das sessões daquela conta.
+	accountID int
+	ch        chan []byte
 }
 
 type Broker struct {
@@ -54,6 +62,9 @@ type Broker struct {
 	history []CallRecord
 
 	SnapshotFn func() []any
+	// AccountForSession resolve o account_id do Chatwoot de uma sessão (0 = nenhum).
+	// Injetado pelo server para escopar os eventos de chamada por conta.
+	AccountForSession func(sessionID string) int
 }
 
 func NewBroker() *Broker {
@@ -63,8 +74,8 @@ func NewBroker() *Broker {
 	}
 }
 
-func (b *Broker) subscribe(clientID string) *subscriber {
-	s := &subscriber{clientID: clientID, ch: make(chan []byte, 32)}
+func (b *Broker) subscribe(clientID string, accountID int) *subscriber {
+	s := &subscriber{clientID: clientID, accountID: accountID, ch: make(chan []byte, 32)}
 	b.mu.Lock()
 	b.subs[s] = struct{}{}
 	b.mu.Unlock()
@@ -93,11 +104,92 @@ func (b *Broker) broadcast(ev any) {
 	}
 }
 
+// broadcastForSession entrega um evento apenas aos assinantes com escopo compatível
+// com a conta da sessão que o originou: os sem escopo (accountID 0 = painel admin)
+// recebem sempre; um widget de conta só recebe se for a MESMA conta da sessão.
+// Corrige o vazamento em que a chamada recebida de uma empresa tocava no widget de
+// outra empresa que compartilha a mesma API key.
+func (b *Broker) broadcastForSession(sessionID string, ev any) {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	acct := 0
+	if b.AccountForSession != nil {
+		acct = b.AccountForSession(sessionID)
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for s := range b.subs {
+		if s.accountID != 0 && s.accountID != acct {
+			continue // widget de outra conta: não deve tocar/abrir
+		}
+		select {
+		case s.ch <- data:
+		default:
+		}
+	}
+}
+
+// broadcastForSessionTargeted é como broadcastForSession, mas se targetClientID != ""
+// entrega o evento SÓ ao assinante daquele navegador (dentro do escopo de conta). Usado
+// para direcionar a oferta de transferência a um atendente específico.
+func (b *Broker) broadcastForSessionTargeted(sessionID, targetClientID string, ev any) {
+	if targetClientID == "" {
+		b.broadcastForSession(sessionID, ev)
+		return
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	acct := 0
+	if b.AccountForSession != nil {
+		acct = b.AccountForSession(sessionID)
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for s := range b.subs {
+		if s.accountID != 0 && s.accountID != acct {
+			continue
+		}
+		if s.clientID != targetClientID {
+			continue
+		}
+		select {
+		case s.ch <- data:
+		default:
+		}
+	}
+}
+
+// emitTransferOffer avisa o(s) painel(is) que uma chamada ativa foi transferida e está
+// disponível para atender (pickup). Se target != "", só o navegador alvo recebe.
+func (b *Broker) emitTransferOffer(sessionID, id, peer, from, target string) {
+	b.broadcastForSessionTargeted(sessionID, target, map[string]any{
+		"type": "call-transfer-offer", "sessionId": sessionID, "id": id, "peer": peer,
+		"from": from, "offeredAt": time.Now().UnixMilli(),
+	})
+}
+
+// emitTransferClaimed some com a oferta de transferência nos outros painéis quando
+// alguém atende.
+func (b *Broker) emitTransferClaimed(sessionID, id, owner string) {
+	b.broadcastForSession(sessionID, map[string]any{"type": "call-transfer-claimed", "sessionId": sessionID, "id": id, "owner": owner})
+}
+
 func (b *Broker) emitAuthState(sessionID string, a AuthSnapshot) {
-	b.broadcast(map[string]any{
+	ev := map[string]any{
 		"type": "auth-state", "sessionId": sessionID,
 		"paired": a.Paired, "state": a.State, "qr": a.QR,
-	})
+	}
+	if a.Code != "" {
+		ev["code"] = a.Code // código de pareamento por telefone (8 dígitos)
+	}
+	if len(a.Passkey) > 0 {
+		ev["passkey"] = a.Passkey // desafio WebAuthn p/ contas com passkey
+	}
+	b.broadcast(ev)
 }
 
 func (b *Broker) emitSessionList(sessions []SessionInfo) {
@@ -116,7 +208,7 @@ func (b *Broker) upsertCall(r CallRecord) {
 	b.broadcastCallList()
 	b.broadcast(map[string]any{
 		"type": "call-status", "sessionId": r.SessionID, "id": r.CallID, "owner": r.Owner,
-		"status": r.Status, "peer": r.Peer, "startedAt": r.StartedAt,
+		"status": r.Status, "peer": r.Peer, "startedAt": r.StartedAt, "held": r.Held,
 	})
 }
 
@@ -142,6 +234,27 @@ func (b *Broker) setOwner(id, owner string) bool {
 		return false
 	}
 	c.Owner = &owner
+	return true
+}
+
+// reassignOwner troca (ou limpa, com owner=nil) o dono de uma chamada sem as travas
+// do setOwner, e re-emite call-list/call-status para os painéis refletirem. Usado na
+// transferência: liberar o dono ao ofertar e fixar o novo dono no pickup.
+func (b *Broker) reassignOwner(id string, owner *string) bool {
+	b.mu.Lock()
+	c, ok := b.calls[id]
+	if !ok {
+		b.mu.Unlock()
+		return false
+	}
+	c.Owner = owner
+	rec := *c
+	b.mu.Unlock()
+	b.broadcastCallList()
+	b.broadcast(map[string]any{
+		"type": "call-status", "sessionId": rec.SessionID, "id": rec.CallID, "owner": rec.Owner,
+		"status": rec.Status, "peer": rec.Peer, "startedAt": rec.StartedAt, "held": rec.Held,
+	})
 	return true
 }
 
@@ -193,14 +306,29 @@ func (b *Broker) broadcastCallList() {
 	b.broadcast(map[string]any{"type": "call-list", "calls": list})
 }
 
-func (b *Broker) emitIncoming(sessionID, id, peer string) {
-	b.broadcast(map[string]any{
-		"type": "incoming", "sessionId": sessionID, "id": id, "peer": peer, "offeredAt": time.Now().UnixMilli(),
+func (b *Broker) emitIncoming(sessionID, id, peer, phone, name string, video bool) {
+	// escopado por conta: só toca no widget da empresa dona da sessão.
+	// phone/name resolvidos (issue #9): o widget mostra o número/nome em vez do
+	// LID cru; peer segue no payload por compatibilidade.
+	b.broadcastForSession(sessionID, map[string]any{
+		"type": "incoming", "sessionId": sessionID, "id": id, "peer": peer,
+		"phone": phone, "name": name,
+		"video": video, "offeredAt": time.Now().UnixMilli(),
+	})
+}
+
+// emitVideoState avisa a UI sobre negociação de vídeo mid-call (pedido de upgrade,
+// câmera do peer ligada/desligada, etc.). Escopado por conta como as chamadas.
+func (b *Broker) emitVideoState(sessionID, id, kind string, peerVideo, localVideo, upgradeIncoming, upgradeOutgoing bool) {
+	b.broadcastForSession(sessionID, map[string]any{
+		"type": "video-state", "sessionId": sessionID, "id": id, "kind": kind,
+		"peerVideo": peerVideo, "localVideo": localVideo,
+		"upgradeIncoming": upgradeIncoming, "upgradeOutgoing": upgradeOutgoing,
 	})
 }
 
 func (b *Broker) emitIncomingClaimed(sessionID, id, owner string) {
-	b.broadcast(map[string]any{"type": "incoming-claimed", "sessionId": sessionID, "id": id, "owner": owner})
+	b.broadcastForSession(sessionID, map[string]any{"type": "incoming-claimed", "sessionId": sessionID, "id": id, "owner": owner})
 }
 
 func (b *Broker) historyRows(sessionID string, limit int) []CallRecord {
@@ -215,7 +343,7 @@ func (b *Broker) historyRows(sessionID string, limit int) []CallRecord {
 	return rows
 }
 
-func (b *Broker) serveSSE(w http.ResponseWriter, r *http.Request, clientID string) {
+func (b *Broker) serveSSE(w http.ResponseWriter, r *http.Request, clientID string, accountID int) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -226,7 +354,7 @@ func (b *Broker) serveSSE(w http.ResponseWriter, r *http.Request, clientID strin
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	sub := b.subscribe(clientID)
+	sub := b.subscribe(clientID, accountID)
 	defer b.unsubscribe(sub)
 
 	if b.SnapshotFn != nil {

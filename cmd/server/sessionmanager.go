@@ -58,6 +58,20 @@ func (m *SessionManager) unregister(id string) {
 	m.mu.Unlock()
 }
 
+// accountIDForSession devolve o account_id do Chatwoot ligado a uma sessão, ou 0
+// se ela não tem Chatwoot configurado. Usado para escopar os eventos de chamada
+// recebida por conta (multi-tenant), para não tocar no widget de outra empresa.
+func (m *SessionManager) accountIDForSession(sessionID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if s, ok := m.sessions[sessionID]; ok {
+		if c := s.getChatwoot(); c.valid() {
+			return c.AccountID
+		}
+	}
+	return 0
+}
+
 func (m *SessionManager) sessionForChatwootAccount(accountID int) *Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -144,6 +158,8 @@ func (m *SessionManager) Restore(ctx context.Context) error {
 		s.waContainer = container
 		s.waDB = db
 		s.setWebhook(row.Webhook)
+		s.setRecording(row.Recording)
+		s.setProxy(row.Proxy)
 		if row.Chatwoot != "" {
 			var cfg ChatwootConfig
 			if json.Unmarshal([]byte(row.Chatwoot), &cfg) == nil {
@@ -207,6 +223,8 @@ func (m *SessionManager) Delete(ctx context.Context, id string) error {
 	}
 	m.unregister(id)
 	_ = m.store.delete(ctx, id)
+	// a fila de reentrega vive no banco principal; limpa as pendências órfãs.
+	_ = m.store.deleteOutboxForSession(ctx, id)
 	m.broker.emitSessionList(m.infos())
 	m.log.Info("session deleted", "session", id)
 	return nil
@@ -244,6 +262,26 @@ func (m *SessionManager) Pair(id string) error {
 	m.broker.emitSessionList(m.infos())
 	m.log.Info("session re-pairing", "session", id)
 	return nil
+}
+
+// PairPhone inicia o pareamento por CÓDIGO (sem QR) e devolve o código de 8
+// dígitos que o usuário digita no WhatsApp do aparelho.
+func (m *SessionManager) PairPhone(id, phone string) (string, error) {
+	s, ok := m.Get(id)
+	if !ok {
+		return "", fmt.Errorf("no session %s", id)
+	}
+	if s.client.Store.ID != nil {
+		return "", fmt.Errorf("session already paired")
+	}
+	s.replaceClient(whatsmeow.NewClient(s.waContainer.NewDevice(), m.waLogger))
+	code, err := s.startPhonePairing(m.appCtx, phone)
+	if err != nil {
+		return "", fmt.Errorf("start phone pairing: %w", err)
+	}
+	m.broker.emitSessionList(m.infos())
+	m.log.Info("session phone-pairing", "session", id)
+	return code, nil
 }
 
 func (m *SessionManager) disconnectAll() {

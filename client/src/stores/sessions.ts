@@ -3,14 +3,21 @@ import { eventStream, type BrokerEvent } from "@/lib/event-stream";
 import { getClientId } from "@/lib/client-id";
 import { listSessions } from "@/services/sessions";
 import type { SessionInfo } from "@/types/session";
+import type { WebAuthnPublicKey } from "@/lib/passkey";
 
 type State = {
   sessions: SessionInfo[];
   qrs: Record<string, string>;
+  codes: Record<string, string>; // código de pareamento por telefone (8 dígitos) por sessão
+  passkeys: Record<string, WebAuthnPublicKey>; // desafio WebAuthn pendente por sessão
   activeId: string | null;
 };
 
-export const useSessions = create<State>(() => ({ sessions: [], qrs: {}, activeId: null }));
+export const useSessions = create<State>(() => ({ sessions: [], qrs: {}, codes: {}, passkeys: {}, activeId: null }));
+
+/** Guarda localmente o código devolvido pelo POST /pair-code (a UI mostra na hora). */
+export const setPairingCode = (id: string, code: string): void =>
+  useSessions.setState((s) => ({ codes: { ...s.codes, [id]: code } }));
 
 export const setActiveSession = (id: string): void => useSessions.setState({ activeId: id });
 
@@ -35,7 +42,9 @@ export const ensureSessionsWired = (): void => {
         const ids = new Set(ev.sessions.map((x) => x.id));
         const qrs: Record<string, string> = {};
         for (const [id, qr] of Object.entries(s.qrs)) if (ids.has(id)) qrs[id] = qr;
-        return { sessions: ev.sessions, qrs, activeId: pickActive(ev.sessions, s.activeId) };
+        const codes: Record<string, string> = {};
+        for (const [id, code] of Object.entries(s.codes)) if (ids.has(id)) codes[id] = code;
+        return { sessions: ev.sessions, qrs, codes, activeId: pickActive(ev.sessions, s.activeId) };
       });
     } else if (ev.type === "session-qr") {
       useSessions.setState((s) => ({ qrs: { ...s.qrs, [ev.sessionId]: ev.qr } }));
@@ -47,7 +56,16 @@ export const ensureSessionsWired = (): void => {
         const qrs = { ...s.qrs };
         if (ev.paired) delete qrs[ev.sessionId];
         else if (ev.qr) qrs[ev.sessionId] = ev.qr;
-        return { sessions, qrs };
+        const codes = { ...s.codes };
+        if (ev.paired) delete codes[ev.sessionId];
+        else if (ev.code) codes[ev.sessionId] = ev.code;
+        const passkeys = { ...s.passkeys };
+        if (ev.state === "passkey_request" && ev.passkey) {
+          passkeys[ev.sessionId] = ev.passkey as WebAuthnPublicKey;
+        } else {
+          delete passkeys[ev.sessionId];
+        }
+        return { sessions, qrs, codes, passkeys };
       });
     }
   });

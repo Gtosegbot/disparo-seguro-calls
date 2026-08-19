@@ -8,6 +8,9 @@ export type CallSummary = {
   peer: string;
   startedAt: number;
   status: CallStatus;
+  held?: boolean;
 };
 
-export type IncomingPayload = { sessionId: string; callId: string; peer: string; offeredAt: number };
+export type IncomingPayload = { sessionId: string; callId: string; peer: string; video: boolean; offeredAt: number };
+
+export type TransferOfferPayload = { sessionId: string; callId: string; peer: string; from: string; offeredAt: number };

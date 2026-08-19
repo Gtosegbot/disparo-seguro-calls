@@ -68,6 +68,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	startRecordingJanitor(log)
+
+	// Worker de reentrega ao Chatwoot: reenvia com backoff o que falhou (ex.:
+	// Chatwoot fora do ar) em vez de perder a mensagem.
+	go srv.sessions.runChatwootOutbox(ctx)
+
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.routes()}
 	go func() {
 		log.Info("HTTP server listening", "addr", *addr)

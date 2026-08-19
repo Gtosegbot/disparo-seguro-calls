@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { getChatwoot, setChatwoot, deleteChatwoot } from "@/services/chatwoot";
 
 const empty = { url: "", account_id: "", account_token: "", inbox_id: "", inbox_identifier: "" };
@@ -23,6 +24,9 @@ export const ChatwootDialog = ({ sid }: { sid: string }) => {
   const [enabled, setEnabled] = useState(false);
   const [copied, setCopied] = useState(false);
   const [form, setForm] = useState({ ...empty });
+  const [mirrorApi, setMirrorApi] = useState(false);
+  const [importHistory, setImportHistory] = useState(false);
+  const [importDays, setImportDays] = useState("30");
 
   const webhookUrl = `${window.location.origin}/api/sessions/${sid}/chatwoot/webhook`;
 
@@ -32,6 +36,9 @@ export const ChatwootDialog = ({ sid }: { sid: string }) => {
       .then((r) => {
         setEnabled(r.enabled);
         const c = r.chatwoot || ({} as typeof r.chatwoot);
+        setMirrorApi(!!c.mirror_api);
+        setImportHistory(!!c.import_history);
+        setImportDays(c.import_history_days ? String(c.import_history_days) : "30");
         setForm({
           url: c.url || "",
           account_id: c.account_id ? String(c.account_id) : "",
@@ -55,6 +62,9 @@ export const ChatwootDialog = ({ sid }: { sid: string }) => {
         account_token: form.account_token.trim(),
         inbox_id: Number(form.inbox_id),
         inbox_identifier: form.inbox_identifier.trim(),
+        mirror_api: mirrorApi,
+        import_history: importHistory,
+        import_history_days: Number(importDays) || 30,
       });
       toast.success("Chatwoot conectado a esta sessão");
       setEnabled(true);
@@ -90,9 +100,9 @@ export const ChatwootDialog = ({ sid }: { sid: string }) => {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant={enabled ? "default" : "outline"} size="sm">
+        <Button variant={enabled ? "default" : "outline"} size="sm" title="Chatwoot">
           <MessageSquare className="h-4 w-4" />
-          Chatwoot
+          <span className="hidden sm:inline">Chatwoot</span>
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -139,6 +149,51 @@ export const ChatwootDialog = ({ sid }: { sid: string }) => {
                 {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
+          </div>
+
+          <label className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border p-3">
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">Refletir mensagens enviadas pela API</span>
+              <span className="block text-xs text-muted-foreground">
+                O que for disparado pela API (ex.: n8n) aparece na conversa como nota privada, igual ao
+                que é enviado pelo aparelho. Não reenvia nada ao contato.
+              </span>
+            </span>
+            <Switch
+              checked={mirrorApi}
+              onCheckedChange={setMirrorApi}
+              aria-label="Refletir mensagens enviadas pela API"
+            />
+          </label>
+
+          <div className="rounded-lg border p-3">
+            <label className="flex cursor-pointer items-start justify-between gap-4">
+              <span className="space-y-0.5">
+                <span className="block text-sm font-medium">Importar histórico ao conectar</span>
+                <span className="block text-xs text-muted-foreground">
+                  Traz as conversas antigas que o WhatsApp envia ao parear, reconstruindo a timeline no
+                  Chatwoot. Ative <b>antes de conectar a conta</b> — o histórico só chega no pareamento.
+                </span>
+              </span>
+              <Switch
+                checked={importHistory}
+                onCheckedChange={setImportHistory}
+                aria-label="Importar histórico ao conectar"
+              />
+            </label>
+            {importHistory && (
+              <div className="mt-3 flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">Importar últimos</Label>
+                <Input
+                  value={importDays}
+                  onChange={(e) => setImportDays(e.target.value.replace(/\D/g, ""))}
+                  inputMode="numeric"
+                  className="h-8 w-20"
+                  aria-label="Dias de histórico a importar"
+                />
+                <span className="text-xs text-muted-foreground">dias</span>
+              </div>
+            )}
           </div>
         </div>
 
