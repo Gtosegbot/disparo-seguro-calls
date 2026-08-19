@@ -1,10 +1,11 @@
-﻿package instance
+package instance
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,6 +78,10 @@ func (m *Manager) Create(ctx context.Context, tenantID, displayName string) (*In
 		inst.CreatedAt, inst.UpdatedAt, metaJSON)
 
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "unique") || strings.Contains(errStr, "23505") || strings.Contains(errStr, "UNIQUE") {
+			return nil, ErrDuplicate
+		}
 		return nil, err
 	}
 

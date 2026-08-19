@@ -3,8 +3,10 @@
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -33,8 +35,36 @@ func (r *instancesRouter) mount(mux *http.ServeMux) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-func getTenantID(req *http.Request) string {
-	return req.Header.Get("X-Tenant-ID")
+func getAuthenticatedTenantID(req *http.Request) (string, error) {
+	// 1. Obtém o X-API-Key
+	apiKey := req.Header.Get("X-API-Key")
+	if apiKey == "" {
+		apiKey = req.URL.Query().Get("apiKey")
+	}
+
+	// 2. Compara com a chave mestra do servidor
+	masterKey := os.Getenv("WACALLS_API_KEY")
+	if masterKey != "" && apiKey == masterKey {
+		tenantID := req.Header.Get("X-Tenant-ID")
+		if tenantID == "" {
+			tenantID = "admin-tenant"
+		}
+		return tenantID, nil
+	}
+
+	// 3. Se for chave específica de tenant (começa com "tenant-")
+	if strings.HasPrefix(apiKey, "tenant-") {
+		resolvedTenant := strings.TrimPrefix(apiKey, "tenant-")
+		
+		// Proteção contra falsificação (forged X-Tenant-ID)
+		clientTenant := req.Header.Get("X-Tenant-ID")
+		if clientTenant != "" && clientTenant != resolvedTenant {
+			return "", instance.ErrForbidden
+		}
+		return resolvedTenant, nil
+	}
+
+	return "", errors.New("unauthorized: invalid tenant credentials")
 }
 
 func writeJSONInst(w http.ResponseWriter, code int, v any) {
@@ -51,9 +81,12 @@ func writeErrorInst(w http.ResponseWriter, code int, msg string) {
 
 // POST /api/instances
 func (r *instancesRouter) create(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	if tenantID == "" {
-		writeErrorInst(w, http.StatusUnauthorized, "missing X-Tenant-ID header")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -77,9 +110,12 @@ func (r *instancesRouter) create(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/instances
 func (r *instancesRouter) list(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	if tenantID == "" {
-		writeErrorInst(w, http.StatusUnauthorized, "missing X-Tenant-ID header")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -97,9 +133,16 @@ func (r *instancesRouter) list(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/instances/{id}
 func (r *instancesRouter) get(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	id := req.PathValue("id")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
+	id := req.PathValue("id")
 	inst, err := r.manager.Get(req.Context(), tenantID, id)
 	if err == instance.ErrNotFound {
 		writeErrorInst(w, http.StatusNotFound, err.Error())
@@ -117,9 +160,16 @@ func (r *instancesRouter) get(w http.ResponseWriter, req *http.Request) {
 
 // POST /api/instances/{id}/pair
 func (r *instancesRouter) pair(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	id := req.PathValue("id")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
+	id := req.PathValue("id")
 	inst, err := r.manager.Get(req.Context(), tenantID, id)
 	if err != nil {
 		writeErrorInst(w, http.StatusNotFound, err.Error())
@@ -127,12 +177,11 @@ func (r *instancesRouter) pair(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var body struct {
-		Phone string `json:"phone,omitempty"` // Se fornecido, faz pareamento por Código Numérico
+		Phone string `json:"phone,omitempty"`
 	}
 	_ = json.NewDecoder(req.Body).Decode(&body)
 	phone := strings.TrimSpace(body.Phone)
 
-	// Inicia pareamento no whatsmeow através do SessionManager
 	if phone != "" {
 		code, err := r.sessions.PairPhone(inst.SessionID, phone)
 		if err != nil {
@@ -161,9 +210,16 @@ func (r *instancesRouter) pair(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/instances/{id}/pairing
 func (r *instancesRouter) pairingStatus(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	id := req.PathValue("id")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
+	id := req.PathValue("id")
 	inst, err := r.manager.Get(req.Context(), tenantID, id)
 	if err != nil {
 		writeErrorInst(w, http.StatusNotFound, err.Error())
@@ -180,7 +236,6 @@ func (r *instancesRouter) pairingStatus(w http.ResponseWriter, req *http.Request
 	auth := waSess.auth
 	waSess.mu.Unlock()
 
-	// Retorna formato abstrato White-Label sem expor tokens ou bancos internos
 	resp := instance.PairingResponse{
 		PairingSessionID: inst.ID,
 		Status:           inst.Status,
@@ -196,10 +251,17 @@ func (r *instancesRouter) pairingStatus(w http.ResponseWriter, req *http.Request
 
 // POST /api/instances/{id}/logout
 func (r *instancesRouter) logout(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	id := req.PathValue("id")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
-	err := r.manager.Logout(req.Context(), tenantID, id)
+	id := req.PathValue("id")
+	err = r.manager.Logout(req.Context(), tenantID, id)
 	if err == instance.ErrNotFound {
 		writeErrorInst(w, http.StatusNotFound, err.Error())
 		return
@@ -216,10 +278,17 @@ func (r *instancesRouter) logout(w http.ResponseWriter, req *http.Request) {
 
 // DELETE /api/instances/{id}
 func (r *instancesRouter) deleteInstance(w http.ResponseWriter, req *http.Request) {
-	tenantID := getTenantID(req)
-	id := req.PathValue("id")
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err == instance.ErrForbidden {
+		writeErrorInst(w, http.StatusForbidden, "forbidden: tenant access denied")
+		return
+	} else if err != nil {
+		writeErrorInst(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
-	err := r.manager.Delete(req.Context(), tenantID, id)
+	id := req.PathValue("id")
+	err = r.manager.Delete(req.Context(), tenantID, id)
 	if err == instance.ErrNotFound {
 		writeErrorInst(w, http.StatusNotFound, err.Error())
 		return
