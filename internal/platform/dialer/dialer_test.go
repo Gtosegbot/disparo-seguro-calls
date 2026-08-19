@@ -1,4 +1,4 @@
-﻿package dialer_test
+package dialer_test
 
 import (
 	"context"
@@ -238,6 +238,76 @@ func TestDialer_RetryPacing(t *testing.T) {
 
 	if j.Status != dialer.JobFailed {
 		t.Errorf("expected final state JobFailed, got %s", j.Status)
+	}
+}
+
+func TestDialer_AISessionAutomaticStart(t *testing.T) {
+	resEngine := dialer.NewInMemReservationEngine()
+	queue := dialer.NewQueue(resEngine)
+	ip := newMockInstanceProvider()
+	logger := slog.New(slog.NewTextHandler(&nullWriter{}, nil))
+	scheduler := dialer.NewScheduler(queue, ip, logger)
+
+	camp := &dialer.DialerCampaign{
+		ID:                  "camp-ai",
+		TenantID:            "tenant-A",
+		Name:                "AI Campaign",
+		Mode:                dialer.ModeAI, // Modo IA!
+		Status:              dialer.StatusDraft,
+		MaxConcurrentCalls:  8,
+		DialIntervalSeconds: 1,
+		MaxAttempts:         3,
+		RetryDelaySeconds:   2,
+		Strategy:            "round-robin",
+		InstancePool:        []string{"inst-1"},
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+	queue.SaveCampaign(camp)
+
+	ip.instances["inst-1"] = &dialer.InstanceInfo{
+		ID:                 "inst-1",
+		Status:             "CONNECTED",
+		ActiveCalls:        0,
+		MaxConcurrentCalls: 4,
+	}
+
+	job := &dialer.DialerJob{
+		ID:            "job-ai-1",
+		CampaignID:    camp.ID,
+		TenantID:      camp.TenantID,
+		LeadID:        "lead-ai-1",
+		Phone:         "551199990000",
+		Name:          "AI Lead 1",
+		Position:      1,
+		Status:        dialer.JobQueued,
+		Attempt:       1,
+		NextAttemptAt: time.Now().Add(-1 * time.Minute),
+		CreatedAt:     time.Now(),
+	}
+	queue.Enqueue([]*dialer.DialerJob{job})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	scheduler.StartCampaign(ctx, camp.ID)
+	time.Sleep(1200 * time.Millisecond)
+	scheduler.StopCampaign(camp.ID)
+
+	jobs := queue.GetJobsForCampaign(camp.ID)
+	j := jobs[0]
+
+	// Valida se o status transicionou corretamente para GREETING de forma automatizada
+	if j.Status != dialer.JobGreeting {
+		t.Errorf("expected job state JobGreeting, got %s", j.Status)
+	}
+
+	if j.AISessionID == "" || j.ProviderSessionID == "" {
+		t.Errorf("expected AI session context IDs to be populated, got ai=%q, prov=%q", j.AISessionID, j.ProviderSessionID)
+	}
+
+	if j.Provider != "grok_realtime" || j.VoiceProfile != "sales" {
+		t.Errorf("expected provider and profile to be resolved, got prov=%q, prof=%q", j.Provider, j.VoiceProfile)
 	}
 }
 

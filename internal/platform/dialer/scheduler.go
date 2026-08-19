@@ -1,4 +1,4 @@
-﻿package dialer
+package dialer
 
 import (
 	"context"
@@ -195,6 +195,19 @@ func (s *Scheduler) dispatchCall(ctx context.Context, instanceID string, job *Di
 
 	job.CallID = callID
 	_ = s.queue.UpdateJobStatus(ctx, job.ID, JobRinging)
+
+	camp, ok := s.queue.GetCampaign(job.CampaignID)
+	if ok && camp.Mode == ModeAI {
+		_ = s.queue.UpdateJobStatus(ctx, job.ID, JobAIStarting)
+		// Simula ID da sessão de IA e do provedor mapeando-os de forma automática
+		job.AISessionID = "ai-sess-" + job.ID
+		job.ProviderSessionID = "prov-sess-" + job.ID
+		job.Provider = "grok_realtime"
+		job.VoiceProfile = "sales"
+		job.AgentID = "sales_agent"
+
+		_ = s.queue.UpdateJobStatus(ctx, job.ID, JobGreeting)
+	}
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

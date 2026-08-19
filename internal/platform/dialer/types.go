@@ -1,4 +1,4 @@
-﻿package dialer
+package dialer
 
 import (
 	"time"
@@ -52,6 +52,12 @@ const (
 	JobDialing      JobStatus = "DIALING"
 	JobRinging      JobStatus = "RINGING"
 	JobConnected    JobStatus = "CONNECTED"
+	JobAIStarting   JobStatus = "AI_STARTING"
+	JobGreeting     JobStatus = "GREETING"
+	JobListening    JobStatus = "LISTENING"
+	JobThinking     JobStatus = "THINKING"
+	JobSpeaking     JobStatus = "SPEAKING"
+	JobEnded        JobStatus = "ENDED"
 	JobCompleted    JobStatus = "COMPLETED"
 	JobBusy         JobStatus = "BUSY"
 	JobNoAnswer     JobStatus = "NO_ANSWER"
@@ -62,23 +68,27 @@ const (
 
 // DialerJob represents a single lead queue target to dial in a campaign.
 type DialerJob struct {
-	ID               string    `json:"job_id"`
-	CampaignID       string    `json:"campaign_id"`
-	TenantID         string    `json:"tenant_id"`
-	LeadID           string    `json:"lead_id"`
-	Phone            string    `json:"phone"`
-	Name             string    `json:"name"`
-	Position         int       `json:"position"`
-	Status           JobStatus `json:"status"`
-	Attempt          int       `json:"attempt"`
-	InstanceID       string    `json:"instance_id,omitempty"` // Qual linha disparou
-	CallID           string    `json:"call_id,omitempty"`
-	AISessionID      string    `json:"ai_session_id,omitempty"`
-	ProviderSessionID string   `json:"provider_session_id,omitempty"`
-	NextAttemptAt    time.Time `json:"next_attempt_at"`
-	CreatedAt        time.Time `json:"created_at"`
-	StartedAt        time.Time `json:"started_at,omitempty"`
-	EndedAt          time.Time `json:"ended_at,omitempty"`
+	ID                string    `json:"job_id"`
+	CampaignID        string    `json:"campaign_id"`
+	TenantID          string    `json:"tenant_id"`
+	LeadID            string    `json:"lead_id"`
+	Phone             string    `json:"phone"`
+	Name              string    `json:"name"`
+	Position          int       `json:"position"`
+	Status            JobStatus `json:"status"`
+	Attempt           int       `json:"attempt"`
+	InstanceID        string    `json:"instance_id,omitempty"` // Qual linha disparou
+	CallID            string    `json:"call_id,omitempty"`
+	AISessionID       string    `json:"ai_session_id,omitempty"`
+	ProviderSessionID string    `json:"provider_session_id,omitempty"`
+	VoiceProfile      string    `json:"voice_profile,omitempty"`
+	AgentID           string    `json:"agent_id,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	Outcome           string    `json:"outcome,omitempty"`
+	NextAttemptAt     time.Time `json:"next_attempt_at"`
+	CreatedAt         time.Time `json:"created_at"`
+	StartedAt         time.Time `json:"started_at,omitempty"`
+	EndedAt           time.Time `json:"ended_at,omitempty"`
 }
 
 // DialerMetrics contains metrics aggregated per campaign or per instance.
