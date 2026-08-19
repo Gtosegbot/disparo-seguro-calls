@@ -11,6 +11,7 @@ import (
 	"wacalls/internal/ai/gateway"
 	"wacalls/internal/ai/provider"
 	"wacalls/internal/ai/session"
+	"wacalls/internal/platform/instance"
 )
 
 type server struct {
@@ -24,6 +25,9 @@ type server struct {
 	aiProviders *provider.Registry
 	aiEvents    *events.Bus
 	aiGateway   *gateway.VoiceGateway
+
+	// Camada de produto White-Label
+	instanceMgr *instance.Manager
 }
 
 // newServer monta o provedor de banco (Postgres, 1 banco por sessão no estilo
@@ -57,6 +61,10 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 	aiProvs.Register("grok_realtime", xaiKey, func() provider.Provider {
 		return provider.NewGrokRealtime(xaiKey, log)
 	})
+	geminiKey := os.Getenv("WACALLS_GEMINI_KEY")
+	aiProvs.Register("gemini_realtime", geminiKey, func() provider.Provider {
+		return provider.NewGeminiRealtime(geminiKey, log)
+	})
 	aiProvs.Register("loopback", "", func() provider.Provider {
 		return provider.NewLoopbackProvider(log)
 	})
@@ -66,6 +74,10 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 	broker := NewBroker()
 	mgr := newSessionManager(ctx, dbProv, broker, store, waLogger, log, maxCalls)
 	mgr.aiGateway = aiGW // injeta o gateway na gerência de sessões
+
+	// Inicialização do InstanceManager
+	instMgr := instance.NewManager(mainDB, mgr)
+	mgr.instanceMgr = instMgr
 
 	broker.SnapshotFn = mgr.snapshotEvents
 	broker.AccountForSession = mgr.accountIDForSession
@@ -79,5 +91,6 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 		aiProviders: aiProvs,
 		aiEvents:    aiBus,
 		aiGateway:   aiGW,
+		instanceMgr: instMgr,
 	}, nil
 }
