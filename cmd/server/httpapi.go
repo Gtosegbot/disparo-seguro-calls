@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -17,6 +18,10 @@ import (
 
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
+
+	// Health and Readiness Checks
+	mux.HandleFunc("GET /health", s.handleLiveness)
+	mux.HandleFunc("GET /ready", s.handleReadiness)
 
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionList)
@@ -715,4 +720,33 @@ func normalizePhone(p string) string {
 		}
 	}
 	return b.String()
+}
+
+func (s *server) handleLiveness(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"HEALTHY","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `"}`))
+}
+
+func (s *server) handleReadiness(w http.ResponseWriter, req *http.Request) {
+	// Verifica a saúde das conexões de banco de dados
+	dbHealthy := true
+	if s.sessions != nil && s.sessions.db != nil {
+		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		defer cancel()
+		if err := s.sessions.db.PingContext(ctx); err != nil {
+			dbHealthy = false
+			s.log.Error("readiness check: DB ping failed", "err", err)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if !dbHealthy {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"UNREADY","database":"FAILED"}`))
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"READY","database":"OK"}`))
 }
