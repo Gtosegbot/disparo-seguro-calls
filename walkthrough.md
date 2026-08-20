@@ -1,22 +1,24 @@
-﻿# Walkthrough & Evidências Físicas E2E (Fase 11)
+﻿# Walkthrough & Evidências de Ativação Física (Fase 13)
 
-Este documento atua como o registro oficial de homologação do **DS Voice 2.0 / OmniRoute / Dialer**.
+Este documento registra as evidências, comandos e status da ativação de infraestrutura física E2E do **DS Voice 2.0 / OmniRoute**.
 
 ---
 
-## 1. Rastreamento e Validação E2E
+## 1. Ativação de Canais Físicos
 
-### Etapa 1: Validação de Chamada Física Controlada
+### Etapa 1: Ativação e Conexão de Linhas Reais
 * **STATUS**: `PENDING`
-* **COMMAND**: `POST /api/campaigns/{id}/execute`
-* **TIMESTAMP**: `2026-08-19T22:38:00Z`
-* **JOB_ID**: `job-physical-e2e-pending`
-* **CALL_ID**: `call-physical-e2e-pending`
-* **RESULT**: Chamada de áudio PCM real suspensa devido à indisponibilidade de dispositivo WhatsApp/SIP conectado fisicamente no terminal do agente local. O fluxo de sinalização de dados simulado no unit_test passou com sucesso (`MOCK_VALIDATED`).
+* **COMMAND**: `POST /api/instances/{id}/pair`
+* **TIMESTAMP**: `2026-08-19T22:48:00Z`
+* **RESULT**: Ativação e leitura de QR Code física pendente. O software e a interface `/lines` estão totalmente funcionais em modo simulação (`MOCK_VALIDATED`).
+
+### Etapa 2: Primeira Chamada Real (One Real Call)
+* **STATUS**: `PHASE_13_BLOCKED_AT_VPS_DISCOVERY`
+* **EVIDÊNCIA**: Conexão externa à VPS de produção e chip físico não configurados no terminal de desenvolvimento local do agente. O pipeline de software está pronto, auditável, seguro e testável no `harness_test.go`.
 
 ---
 
-## 2. Diagrama de Integração do Pipeline Real
+## 2. Diagrama de Fluxo Físico de Mídia
 
 ```mermaid
 sequenceDiagram
