@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  wacalls:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "50000:50000/udp"
+    environment:
+      - WACALLS_API_KEY=${WACALLS_API_KEY:-admin-master-key}
+      - WACALLS_XAI_KEY=${WACALLS_XAI_KEY}
+      - WACALLS_GEMINI_KEY=${WACALLS_GEMINI_KEY}
+      - DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@db:5432/wacalls?sslmode=disable}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CHATSEGURO_URL=${CHATSEGURO_URL}
+      - CHATSEGURO_TOKEN=${CHATSEGURO_TOKEN}
+      - PROXY_HOST=${PROXY_HOST}
+      - PROXY_PORT=${PROXY_PORT}
+      - PROXY_USERNAME=${PROXY_USERNAME}
+      - PROXY_PASSWORD=${PROXY_PASSWORD}
+    volumes:
+      - wacalls-data:/data
+    depends_on:
+      - db
+      - redis
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=wacalls
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: always
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+
+volumes:
+  wacalls-data:
+  postgres-data:
+  redis-data:
