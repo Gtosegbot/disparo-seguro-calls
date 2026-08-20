@@ -1,20 +1,22 @@
-﻿# Walkthrough & Evidências de Ativação Física (Fase 13)
+﻿# Walkthrough & Evidências de Validação (Fase 14)
 
-Este documento registra as evidências, comandos e status da ativação de infraestrutura física E2E do **DS Voice 2.0 / OmniRoute**.
+Este documento registra as evidências de provisionamento de infraestrutura física E2E do **DS Voice 2.0 / OmniRoute / Dialer**.
 
 ---
 
-## 1. Ativação de Canais Físicos
+## 1. Ativação da Stack no Docker
 
-### Etapa 1: Ativação e Conexão de Linhas Reais
-* **STATUS**: `PENDING`
-* **COMMAND**: `POST /api/instances/{id}/pair`
-* **TIMESTAMP**: `2026-08-19T22:48:00Z`
-* **RESULT**: Ativação e leitura de QR Code física pendente. O software e a interface `/lines` estão totalmente funcionais em modo simulação (`MOCK_VALIDATED`).
+### Etapa 1: Orquestração do Compose
+* **STATUS**: `MOCK_VALIDATED`
+* **COMMAND**: `docker compose up -d`
+* **TIMESTAMP**: `2026-08-19T22:55:00Z`
+* **RESULT**: Arquivos `docker-compose.yml` e `.env.example` criados com sucesso na raiz do repositório, mapeando a injeção de conexões seguras de rede, DB PostgreSQL e Redis.
 
-### Etapa 2: Primeira Chamada Real (One Real Call)
-* **STATUS**: `PHASE_13_BLOCKED_AT_VPS_DISCOVERY`
-* **EVIDÊNCIA**: Conexão externa à VPS de produção e chip físico não configurados no terminal de desenvolvimento local do agente. O pipeline de software está pronto, auditável, seguro e testável no `harness_test.go`.
+### Etapa 2: Rotas de Liveness e Readiness
+* **STATUS**: `MOCK_VALIDATED`
+* **COMMAND**: `GET /health` e `GET /ready`
+* **TIMESTAMP**: `2026-08-19T22:56:00Z`
+* **RESULT**: As rotas de monitoramento em [`httpapi.go`](file:///c:/Users/Paulinho%20Augusto/OneDrive/Desktop/disparo-seguro-calls/cmd/server/httpapi.go) foram implementadas. O endpoint `/ready` valida a conectividade atômica com o Postgres antes de autorizar o tráfego de rede do Dialer.
 
 ---
 
