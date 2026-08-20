@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"encoding/json"
@@ -49,9 +49,9 @@ func (r *campaignsRouter) mount(mux *http.ServeMux) {
 
 // GET /api/campaigns
 func (r *campaignsRouter) listCampaigns(w http.ResponseWriter, req *http.Request) {
-	tenantID := req.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		http.Error(w, "missing X-Tenant-ID", http.StatusUnauthorized)
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 
@@ -62,9 +62,9 @@ func (r *campaignsRouter) listCampaigns(w http.ResponseWriter, req *http.Request
 
 // POST /api/campaigns
 func (r *campaignsRouter) createCampaign(w http.ResponseWriter, req *http.Request) {
-	tenantID := req.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		http.Error(w, "missing X-Tenant-ID", http.StatusUnauthorized)
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 
@@ -105,9 +105,9 @@ func (r *campaignsRouter) createCampaign(w http.ResponseWriter, req *http.Reques
 // POST /api/campaigns/{id}/execute
 func (r *campaignsRouter) executeCampaign(w http.ResponseWriter, req *http.Request) {
 	campaignID := req.PathValue("id")
-	tenantID := req.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		http.Error(w, "missing X-Tenant-ID", http.StatusUnauthorized)
+	tenantID, err := getAuthenticatedTenantID(req)
+	if err != nil {
+		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 
