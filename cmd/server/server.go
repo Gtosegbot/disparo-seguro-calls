@@ -8,6 +8,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"wacalls/internal/ai/events"
+	"wacalls/internal/ai/fabric"
 	"wacalls/internal/ai/gateway"
 	"wacalls/internal/ai/provider"
 	"wacalls/internal/ai/session"
@@ -25,6 +26,7 @@ type server struct {
 	aiProviders *provider.Registry
 	aiEvents    *events.Bus
 	aiGateway   *gateway.VoiceGateway
+	aiFabric    *fabric.Fabric
 
 	// Camada de produto White-Label
 	instanceMgr *instance.Manager
@@ -70,6 +72,7 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 	})
 
 	aiGW := gateway.NewVoiceGateway(aiReg, aiProvs, aiBus, log)
+	aiFabric := fabric.NewFabric(aiProvs, log)
 
 	broker := NewBroker()
 	mgr := newSessionManager(ctx, dbProv, broker, store, waLogger, log, maxCalls)
@@ -91,6 +94,7 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 		aiProviders: aiProvs,
 		aiEvents:    aiBus,
 		aiGateway:   aiGW,
+		aiFabric:    aiFabric,
 		instanceMgr: instMgr,
 	}, nil
 }

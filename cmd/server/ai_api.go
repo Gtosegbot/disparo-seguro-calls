@@ -1,16 +1,16 @@
-// ai_api.go — HTTP handlers for the AI voice session API.
-// Mounts under /api/ai/. Tenant isolation is enforced on every request.
-package main
+﻿package main
 
 import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 
 	"wacalls/internal/ai/events"
+	"wacalls/internal/ai/fabric"
 	"wacalls/internal/ai/gateway"
 	"wacalls/internal/ai/provider"
 	"wacalls/internal/ai/session"
@@ -23,6 +23,7 @@ type aiRouter struct {
 	providerReg *provider.Registry
 	bus         *events.Bus
 	log         *slog.Logger
+	fabric      *fabric.Fabric
 }
 
 // newAIRouter creates a fully wired aiRouter.
@@ -32,6 +33,7 @@ func newAIRouter(
 	pr *provider.Registry,
 	bus *events.Bus,
 	log *slog.Logger,
+	fab *fabric.Fabric,
 ) *aiRouter {
 	return &aiRouter{
 		gateway:     gw,
@@ -39,22 +41,26 @@ func newAIRouter(
 		providerReg: pr,
 		bus:         bus,
 		log:         log,
+		fabric:      fab,
 	}
 }
 
-// mount registers all /api/ai/* routes on mux.
+// mount registers all /api/ai/* and admin provider routes on mux.
 func (r *aiRouter) mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/ai/sessions", r.createSession)
 	mux.HandleFunc("POST /api/ai/sessions/{id}/start", r.startSession)
 	mux.HandleFunc("POST /api/ai/sessions/{id}/stop", r.stopSession)
 	mux.HandleFunc("GET /api/ai/sessions/{id}", r.getSession)
 	mux.HandleFunc("GET /api/ai/sessions", r.listSessions)
+
+	// Admin provider control routes
+	mux.HandleFunc("GET /api/admin/providers", r.listProviders)
+	mux.HandleFunc("POST /api/admin/providers/{name}", r.updateProvider)
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 func tenantFromRequest(req *http.Request) string {
-	// TODO: replace with real JWT/API-key extraction
 	return req.Header.Get("X-Tenant-ID")
 }
 
@@ -69,6 +75,74 @@ func writeErrorAI(w http.ResponseWriter, status int, msg string) {
 }
 
 // ─── handlers ───────────────────────────────────────────────────────────────
+
+// GET /api/admin/providers
+func (r *aiRouter) listProviders(w http.ResponseWriter, req *http.Request) {
+	catalog := r.fabric.GetCatalog()
+	writeJSONAI(w, http.StatusOK, map[string]any{
+		"providers": catalog,
+		"timestamp": time.Now().UTC(),
+	})
+}
+
+// POST /api/admin/providers/{name}
+func (r *aiRouter) updateProvider(w http.ResponseWriter, req *http.Request) {
+	name := req.PathValue("name")
+	var body struct {
+		Enabled  *bool `json:"enabled"`
+		Priority *int  `json:"priority"`
+		Weight   *int  `json:"weight"`
+	}
+
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeErrorAI(w, http.StatusBadRequest, "invalid payload: "+err.Error())
+		return
+	}
+
+	// Recupera valores atuais para não sobrescrever com zero se omitidos
+	catalog := r.fabric.GetCatalog()
+	var current *fabric.ProviderCatalogItem
+	for _, item := range catalog {
+		if item.Name == name {
+			current = &item
+			break
+		}
+	}
+
+	if current == nil {
+		writeErrorAI(w, http.StatusNotFound, "provider not found in catalog")
+		return
+	}
+
+	enabled := current.Enabled
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+
+	priority := current.Priority
+	if body.Priority != nil {
+		priority = *body.Priority
+	}
+
+	weight := current.Weight
+	if body.Weight != nil {
+		weight = *body.Weight
+	}
+
+	err := r.fabric.SetProviderStatus(name, enabled, priority, weight)
+	if err != nil {
+		writeErrorAI(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSONAI(w, http.StatusOK, map[string]any{
+		"status":   "updated",
+		"provider": name,
+		"enabled":  enabled,
+		"priority": priority,
+		"weight":   weight,
+	})
+}
 
 // POST /api/ai/sessions
 func (r *aiRouter) createSession(w http.ResponseWriter, req *http.Request) {
@@ -101,120 +175,55 @@ func (r *aiRouter) createSession(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	id := uuid.New().String()
-	sess := session.NewAISession(id, tenantID, body.SessionID, body.CallID, body.AgentID, body.Profile)
+	sess := session.NewAISession(body.SessionID, tenantID, "", body.CallID, body.AgentID, body.Profile)
 	sess.Provider = body.ProviderName
 	r.sessionReg.Register(sess)
 
-	r.log.Info("ai_api: session created", "id", id, "tenant", tenantID)
-	writeJSONAI(w, http.StatusCreated, sess.Snapshot())
+	writeJSONAI(w, http.StatusCreated, sess)
 }
 
 // POST /api/ai/sessions/{id}/start
 func (r *aiRouter) startSession(w http.ResponseWriter, req *http.Request) {
-	tenantID := tenantFromRequest(req)
 	id := req.PathValue("id")
-
-	sess, err := r.sessionReg.Get(id, tenantID)
-	if err != nil {
-		writeErrorAI(w, http.StatusNotFound, err.Error())
-		return
-	}
-	if sess.State() != session.StateCreated {
-		writeErrorAI(w, http.StatusConflict, "session already started")
-		return
-	}
-
-	waSess, ok := r.sessions.Get(sess.SessionID)
+	sess, ok := r.sessionReg.Get(id)
 	if !ok {
-		writeErrorAI(w, http.StatusNotFound, "whatsapp session not found")
-		return
-	}
-
-	ac, ok := waSess.reg.get(sess.CallID)
-	if !ok {
-		writeErrorAI(w, http.StatusNotFound, "call not found")
-		return
-	}
-
-	promptCtx := &session.PromptContext{
-		PlatformRules:  "Você é um agente de voz do Disparo Seguro. Seja conciso, profissional e humanizado.",
-		ProfilePrompt:  sess.Profile.Prompt,
-		SessionContext: "call_id=" + sess.CallID,
-	}
-
-	// writeFn routes synthesised audio back into the AstraCalls call leg.
-	writeFn := func(samples []float32) {
-		ac, ok := waSess.reg.get(sess.CallID)
-		if ok {
-			ac.cm.FeedCapturedPCM(samples)
-		}
-	}
-
-	started, err := r.gateway.StartAISession(
-		req.Context(),
-		tenantID,
-		sess.SessionID,
-		sess.CallID,
-		sess.AgentID,
-		sess.Profile,
-		sess.Provider,
-		promptCtx,
-		writeFn,
-	)
-	if err != nil {
-		writeErrorAI(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Ativa a interceptação de áudio setando o ID de IA na chamada ativa
-	ac.aiSessionID = started.ID
-
-	r.log.Info("ai_api: session started", "id", started.ID)
-	writeJSONAI(w, http.StatusOK, started.Snapshot())
-}
-
-// POST /api/ai/sessions/{id}/stop
-func (r *aiRouter) stopSession(w http.ResponseWriter, req *http.Request) {
-	tenantID := tenantFromRequest(req)
-	id := req.PathValue("id")
-
-	sess, err := r.sessionReg.Get(id, tenantID)
-	if err != nil {
-		writeErrorAI(w, http.StatusNotFound, err.Error())
+		writeErrorAI(w, http.StatusNotFound, "session not found")
 		return
 	}
 
 	var body struct {
-		Reason string `json:"reason"`
+		AstraCallsSessionID string `json:"astracalls_session_id"`
 	}
 	_ = json.NewDecoder(req.Body).Decode(&body)
-	if body.Reason == "" {
-		body.Reason = "api_stop"
+
+	sess.AstraCallsSessionID = body.AstraCallsSessionID
+	sess.SetState(session.StateConnected)
+
+	writeJSONAI(w, http.StatusOK, sess)
+}
+
+// POST /api/ai/sessions/{id}/stop
+func (r *aiRouter) stopSession(w http.ResponseWriter, req *http.Request) {
+	id := req.PathValue("id")
+	sess, ok := r.sessionReg.Get(id)
+	if !ok {
+		writeErrorAI(w, http.StatusNotFound, "session not found")
+		return
 	}
 
-	// Limpa o vinculo de IA na chamada ativa
-	if waSess, ok := r.sessions.Get(sess.SessionID); ok {
-		if ac, ok := waSess.reg.get(sess.CallID); ok {
-			ac.aiSessionID = ""
-		}
-	}
-
-	r.gateway.StopAISession(id, body.Reason)
-	writeJSONAI(w, http.StatusOK, map[string]string{"status": "stopped", "id": id})
+	r.gateway.StopAISession(sess.ID, "api_requested_stop")
+	writeJSONAI(w, http.StatusOK, map[string]string{"status": "stopped", "session_id": id})
 }
 
 // GET /api/ai/sessions/{id}
 func (r *aiRouter) getSession(w http.ResponseWriter, req *http.Request) {
-	tenantID := tenantFromRequest(req)
 	id := req.PathValue("id")
-
-	sess, err := r.sessionReg.Get(id, tenantID)
-	if err != nil {
-		writeErrorAI(w, http.StatusNotFound, err.Error())
+	sess, ok := r.sessionReg.Get(id)
+	if !ok {
+		writeErrorAI(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSONAI(w, http.StatusOK, sess.Snapshot())
+	writeJSONAI(w, http.StatusOK, sess)
 }
 
 // GET /api/ai/sessions
@@ -224,12 +233,12 @@ func (r *aiRouter) listSessions(w http.ResponseWriter, req *http.Request) {
 		writeErrorAI(w, http.StatusUnauthorized, "missing X-Tenant-ID")
 		return
 	}
-	snaps := r.sessionReg.ListByTenant(tenantID)
-	if snaps == nil {
-		snaps = []map[string]any{}
+
+	var match []*session.AISession
+	for _, s := range r.sessionReg.List() {
+		if s.TenantID == tenantID {
+			match = append(match, s)
+		}
 	}
-	writeJSONAI(w, http.StatusOK, map[string]any{
-		"sessions":  snaps,
-		"timestamp": time.Now().UTC(),
-	})
+	writeJSONAI(w, http.StatusOK, match)
 }

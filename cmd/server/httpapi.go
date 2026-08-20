@@ -172,8 +172,12 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 
 	// Rotas proprietárias de IA
-	aiMux := newAIRouter(s.aiGateway, s.aiSessions, s.aiProviders, s.aiEvents, s.log, s.sessions)
+	aiMux := newAIRouter(s.aiGateway, s.aiSessions, s.aiProviders, s.aiEvents, s.log, s.aiFabric)
 	aiMux.mount(mux)
+
+	// Rotas de instâncias White-Label
+	instMux := newInstancesRouter(s.instanceMgr, s.sessions, s.log)
+	instMux.mount(mux)
 
 	if s.staticDir != "" {
 		if _, err := os.Stat(s.staticDir); err == nil {
