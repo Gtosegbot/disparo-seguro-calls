@@ -9,6 +9,7 @@ import (
 
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/media"
+	"wacalls/internal/platform/dialer"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
@@ -178,6 +179,10 @@ func (s *server) routes() http.Handler {
 	// Rotas de instâncias White-Label
 	instMux := newInstancesRouter(s.instanceMgr, s.sessions, s.log)
 	instMux.mount(mux)
+
+	// Rotas do Discador / Campanhas (Fase 09)
+	campMux := newCampaignsRouter(s.dialerQueue, s.dialerSched, s.idemReg, s.jobStates, s.costEngine, s.log)
+	campMux.mount(mux)
 
 	if s.staticDir != "" {
 		if _, err := os.Stat(s.staticDir); err == nil {

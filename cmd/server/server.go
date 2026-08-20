@@ -12,6 +12,7 @@ import (
 	"wacalls/internal/ai/gateway"
 	"wacalls/internal/ai/provider"
 	"wacalls/internal/ai/session"
+	"wacalls/internal/platform/dialer"
 	"wacalls/internal/platform/instance"
 )
 
@@ -30,6 +31,13 @@ type server struct {
 
 	// Camada de produto White-Label
 	instanceMgr *instance.Manager
+
+	// Camada do Discador (Dialer/Orchestration)
+	dialerQueue *dialer.Queue
+	dialerSched *dialer.Scheduler
+	idemReg     *dialer.IdempotencyRegistry
+	jobStates   *dialer.JobStateMachine
+	costEngine  *dialer.OperationCostEngine
 }
 
 // newServer monta o provedor de banco (Postgres, 1 banco por sessão no estilo
@@ -82,6 +90,17 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 	instMgr := instance.NewManager(mainDB, mgr)
 	mgr.instanceMgr = instMgr
 
+	// Inicializa a camada de Discador (Dialer/Orchestration)
+	engine := dialer.NewInMemReservationEngine()
+	dialerQueue := dialer.NewQueue(engine)
+	idemReg := dialer.NewIdempotencyRegistry()
+	jobStates := dialer.NewJobStateMachine()
+	costEngine := dialer.NewOperationCostEngine()
+	dialerSched := dialer.NewScheduler(dialerQueue, mgr, aiGW, log)
+
+	// Inicia o scheduler em background
+	go dialerSched.Start(ctx)
+
 	broker.SnapshotFn = mgr.snapshotEvents
 	broker.AccountForSession = mgr.accountIDForSession
 
@@ -96,5 +115,10 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 		aiGateway:   aiGW,
 		aiFabric:    aiFabric,
 		instanceMgr: instMgr,
+		dialerQueue: dialerQueue,
+		dialerSched: dialerSched,
+		idemReg:     idemReg,
+		jobStates:   jobStates,
+		costEngine:  costEngine,
 	}, nil
 }
