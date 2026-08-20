@@ -33,6 +33,26 @@ func newSessionStore(ctx context.Context, db *sql.DB) (*sessionStore, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Tabela proprietária de instâncias White-Label
+	_, err = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS instances (
+		id                   TEXT PRIMARY KEY,
+		tenant_id            TEXT NOT NULL,
+		session_id           TEXT NOT NULL UNIQUE,
+		phone                TEXT NOT NULL DEFAULT '',
+		display_name         TEXT NOT NULL DEFAULT '',
+		status               TEXT NOT NULL DEFAULT 'PAIRING',
+		proxy_id             TEXT NOT NULL DEFAULT '',
+		chatseguro_inbox_id  TEXT NOT NULL DEFAULT '',
+		max_concurrent_calls INTEGER NOT NULL DEFAULT 8,
+		created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+		updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+		metadata             JSONB NOT NULL DEFAULT '{}'::jsonb
+	)`)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS instances_tenant_idx ON instances (tenant_id)`)
 	// migração p/ bancos antigos (Postgres aceita IF NOT EXISTS no ADD COLUMN)
 	_, _ = db.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS webhook TEXT`)
 	_, _ = db.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS chatwoot TEXT`)

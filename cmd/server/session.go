@@ -15,6 +15,8 @@ import (
 	"wacalls/internal/voip/wanode"
 	"wacalls/internal/wa"
 
+	"wacalls/internal/platform/instance"
+
 	"database/sql"
 
 	"github.com/mdp/qrterminal/v3"
@@ -544,12 +546,39 @@ func (s *Session) startPhonePairing(ctx context.Context, phone string) (string, 
 	return code, nil
 }
 
+func mapAuthToInstanceState(state string, connected bool) instance.InstanceState {
+	switch state {
+	case "open":
+		return instance.StateConnected
+	case "qr", "pairing_code":
+		return instance.StatePairing
+	case "connecting":
+		return instance.StateReconnecting
+	case "logged_out":
+		return instance.StateReauthRequired
+	default:
+		return instance.StateOffline
+	}
+}
+
 func (s *Session) setAuth(a AuthSnapshot) {
 	s.mu.Lock()
 	s.auth = a
 	s.mu.Unlock()
 	s.mgr.broker.emitAuthState(s.id, a)
 	s.mgr.broker.emitSessionList(s.mgr.infos())
+
+	// Sincroniza com a tabela de instâncias se o gerenciador estiver ativo
+	if s.mgr.instanceMgr != nil {
+		status := mapAuthToInstanceState(a.State, s.client != nil && s.client.IsConnected())
+		phone := ""
+		if s.client != nil && s.client.Store != nil && s.client.Store.ID != nil {
+			phone = s.client.Store.ID.User
+		}
+		go func() {
+			_ = s.mgr.instanceMgr.UpdateStatus(context.Background(), s.id, status, phone)
+		}()
+	}
 }
 
 // notifyDisconnected avisa — UMA vez por queda — que a sessão do WhatsApp caiu:
