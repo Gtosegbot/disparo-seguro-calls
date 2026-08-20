@@ -1,8 +1,9 @@
-﻿package dialer
+package dialer
 
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -125,7 +126,24 @@ func (q *Queue) HandleRetry(ctx context.Context, jobID string) error {
 	if j.Attempt < camp.MaxAttempts {
 		j.Attempt++
 		j.Status = JobRetryPending
-		j.NextAttemptAt = time.Now().Add(time.Duration(camp.RetryDelaySeconds) * time.Second)
+
+		// Backoff Exponencial com Jitter humano de 20%
+		baseDelay := camp.RetryDelaySeconds
+		if baseDelay <= 0 {
+			baseDelay = 10 // delay base default
+		}
+		// Multiplicador: 2 ^ (attempt - 1)
+		multiplier := 1 << (j.Attempt - 1)
+		delaySecs := float64(baseDelay * multiplier)
+
+		// Aplica jitter (+- 20%)
+		jitter := delaySecs * 0.20
+		jitterOffset := (rand.Float64()*2 - 1) * jitter
+		finalDelay := time.Duration(delaySecs+jitterOffset) * time.Second
+		if finalDelay < 1*time.Second {
+			finalDelay = 1 * time.Second
+		}
+		j.NextAttemptAt = time.Now().Add(finalDelay)
 	} else {
 		j.Status = JobFailed
 	}
