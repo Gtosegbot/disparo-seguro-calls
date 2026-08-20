@@ -120,12 +120,18 @@ func (r *campaignsRouter) executeCampaign(w http.ResponseWriter, req *http.Reque
 	// Força o ID do tenant a partir do header de autenticação
 	contract.TenantID = tenantID
 
+	// Validação do Contrato Unificado
+	if err := dialer.ValidateUnifiedContract(&contract); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// 1. Validação de Idempotência
 	jobID := contract.JobID
 	if jobID == "" {
 		jobID = uuid.New().String()
 	}
-	_, err := r.idemRegistry.CheckOrRegister(contract.IdempotencyKey, jobID)
+	_, err := r.idemRegistry.CheckOrRegister(tenantID, contract.IdempotencyKey, jobID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)

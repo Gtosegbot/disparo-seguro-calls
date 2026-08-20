@@ -1,4 +1,4 @@
-﻿package dialer_test
+package dialer_test
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func TestOrchestration_IdempotencyRegistry(t *testing.T) {
 	ir := dialer.NewIdempotencyRegistry()
 
 	// 1. Primeira requisição com idempotency_key
-	jobID, err := ir.CheckOrRegister("key-unique-123", "job-999")
+	jobID, err := ir.CheckOrRegister("tenant-A", "key-unique-123", "job-999")
 	if err != nil {
 		t.Fatalf("first registration failed: %v", err)
 	}
@@ -54,13 +54,22 @@ func TestOrchestration_IdempotencyRegistry(t *testing.T) {
 		t.Errorf("expected returned jobID job-999, got %s", jobID)
 	}
 
-	// 2. Requisição repetida com a mesma chave
-	dupID, err := ir.CheckOrRegister("key-unique-123", "job-888")
+	// 2. Requisição repetida com a mesma chave no mesmo tenant (Bloqueado)
+	dupID, err := ir.CheckOrRegister("tenant-A", "key-unique-123", "job-888")
 	if !errors.Is(err, dialer.ErrIdempotencyBlock) {
 		t.Errorf("expected ErrIdempotencyBlock, got %v", err)
 	}
 	if dupID != "job-999" {
 		t.Errorf("expected original jobID job-999, got %s", dupID)
+	}
+
+	// 3. Mesma chave em tenant DIFERENTE (Deve permitir - operações independentes)
+	diffTenantID, err := ir.CheckOrRegister("tenant-B", "key-unique-123", "job-777")
+	if err != nil {
+		t.Fatalf("different tenant should allow the same key, got error: %v", err)
+	}
+	if diffTenantID != "job-777" {
+		t.Errorf("expected job-777, got %s", diffTenantID)
 	}
 }
 

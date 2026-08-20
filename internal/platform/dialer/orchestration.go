@@ -58,23 +58,41 @@ type ExecutionJob struct {
 // IdempotencyRegistry prevents double-spends of execution requests.
 type IdempotencyRegistry struct {
 	mu   sync.Mutex
-	keys map[string]string // idempotencyKey -> jobID
+	keys map[string]string // scopedKey (tenantID:key) -> jobID
 }
 
 func NewIdempotencyRegistry() *IdempotencyRegistry {
 	return &IdempotencyRegistry{keys: make(map[string]string)}
 }
 
-// CheckOrRegister returns job ID if exists, otherwise registers the idempotency key atomically.
-func (ir *IdempotencyRegistry) CheckOrRegister(key, jobID string) (string, error) {
+// CheckOrRegister returns job ID if exists, otherwise registers the idempotency key atomically per tenant.
+func (ir *IdempotencyRegistry) CheckOrRegister(tenantID, key, jobID string) (string, error) {
+	if key == "" {
+		return jobID, nil // Se for vazia e opcional em GET, permite prosseguir sem travar, mas operações mutáveis validam antes
+	}
 	ir.mu.Lock()
 	defer ir.mu.Unlock()
 
-	if existing, ok := ir.keys[key]; ok {
+	scopedKey := tenantID + ":" + key
+	if existing, ok := ir.keys[scopedKey]; ok {
 		return existing, ErrIdempotencyBlock
 	}
-	ir.keys[key] = jobID
+	ir.keys[scopedKey] = jobID
 	return jobID, nil
+}
+
+// ValidateUnifiedContract audits required parameters of the operations payload.
+func ValidateUnifiedContract(uc *UnifiedContract) error {
+	if uc.TenantID == "" {
+		return errors.New("contract validation failed: tenant_id is required")
+	}
+	if uc.IdempotencyKey == "" {
+		return errors.New("contract validation failed: idempotency_key is required for mutable execution")
+	}
+	if uc.Event == "" {
+		return errors.New("contract validation failed: event name is required")
+	}
+	return nil
 }
 
 // JobStateMachine ensures atomic valid state transitions.
