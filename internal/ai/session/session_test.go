@@ -1,4 +1,4 @@
-﻿// Package session - tests for AISession, PromptContext, VoiceProfile, Registry.
+// Package session - tests for AISession, PromptContext, VoiceProfile, Registry.
 package session_test
 
 import (
@@ -194,6 +194,35 @@ func TestRegistry_ListByTenant(t *testing.T) {
 	list := reg.ListByTenant("tX")
 	if len(list) != 2 {
 		t.Errorf("expected 2 sessions for tX, got %d", len(list))
+	}
+}
+
+func TestRegistry_ReapStaleSessions_WatchdogRecovery(t *testing.T) {
+	reg := session.NewRegistry()
+	s1 := makeSession("stale-1", "t1")
+	s1.SetState(session.StateSpeaking)
+	s1.CreatedAt = time.Now().UTC().Add(-10 * time.Minute) // Expirada há 10 min
+	reg.Register(s1)
+
+	s2 := makeSession("active-2", "t1")
+	s2.SetState(session.StateListening)
+	s2.CreatedAt = time.Now().UTC() // Recém criada
+	reg.Register(s2)
+
+	reaped := reg.ReapStaleSessions(5 * time.Minute)
+	if reaped != 1 {
+		t.Errorf("expected 1 reaped session, got %d", reaped)
+	}
+
+	if s1.State() != session.StateEnded {
+		t.Errorf("stale session should be transitioned to ENDED, got %s", s1.State())
+	}
+	if s1.GetOutcome() == nil || s1.GetOutcome().Reason != "watchdog_timeout_recovery" {
+		t.Errorf("expected watchdog_timeout_recovery outcome reason, got %+v", s1.GetOutcome())
+	}
+
+	if s2.State() != session.StateListening {
+		t.Errorf("active session state should remain untouched, got %s", s2.State())
 	}
 }
 

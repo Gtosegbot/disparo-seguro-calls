@@ -58,7 +58,7 @@ RUN go build -tags mlow -o /wacalls ./cmd/server
 
 # ---------- Stage 4: runtime enxuto ----------
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=opus /opt/libopus_mlow.so /usr/local/lib/libopus_mlow.so
 RUN ldconfig

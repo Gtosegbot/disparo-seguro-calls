@@ -1,4 +1,4 @@
-﻿// Package session - registry stores all active AISessions, keyed by id.
+// Package session - registry stores all active AISessions, keyed by id.
 // All lookups enforce tenant isolation.
 package session
 
@@ -63,4 +63,46 @@ func (r *Registry) ListByTenant(tenantID string) []map[string]any {
 		}
 	}
 	return out
+}
+
+// ReapStaleSessions scans for active sessions exceeding their max duration or timeout and transitions them to StateEnded.
+// Prevents the system from getting stuck in CALLING, PROCESSING, or AUDIO_STREAMING when the peer vanishes.
+func (r *Registry) ReapStaleSessions(defaultMaxAge time.Duration) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	reaped := 0
+
+	for _, s := range r.sessions {
+		st := s.State()
+		if st == StateEnded || st == StateError {
+			continue
+		}
+
+		limit := defaultMaxAge
+		if s.Profile.MaxDuration > 0 {
+			limit = s.Profile.MaxDuration
+		}
+
+		refTime := s.CreatedAt
+		if s.StartedAt != nil {
+			refTime = *s.StartedAt
+		}
+
+		if now.Sub(refTime) > limit {
+			s.SetState(StateEnded)
+			s.MarkEnded(&Outcome{
+				Reason:   "watchdog_timeout_recovery",
+				Duration: now.Sub(refTime),
+				Metadata: map[string]any{
+					"timeout_limit_seconds": limit.Seconds(),
+					"recovered_at":           now,
+				},
+			})
+			reaped++
+		}
+	}
+
+	return reaped
 }
