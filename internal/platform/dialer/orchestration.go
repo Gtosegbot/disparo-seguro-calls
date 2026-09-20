@@ -224,24 +224,107 @@ func (cb *CircuitBreaker) RecordFailure(providerName string) {
 	}
 }
 
-// OperationCostEngine aggregates platform and provider expenditures.
+// CostTransaction represents an immutable financial record of a dialer call.
+type CostTransaction struct {
+	CostEventID  string    `json:"cost_event_id"`
+	TenantID     string    `json:"tenant_id"`
+	CampaignID   string    `json:"campaign_id"`
+	JobID        string    `json:"job_id"`
+	LeadID       string    `json:"lead_id"`
+	CallID       string    `json:"call_id"`
+	Attempt      int       `json:"attempt"`
+	Provider     string    `json:"provider"`
+	PlatformCost float64   `json:"platform_cost"`
+	ProviderCost float64   `json:"provider_cost"`
+	TotalCost    float64   `json:"total_cost"`
+	Billable     bool      `json:"billable"` // attempt != billable event
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// OperationCostEngine aggregates platform and provider expenditures ensuring strict financial integrity.
 type OperationCostEngine struct {
-	mu     sync.Mutex
-	costs  map[string]float64 // jobID -> cost sum
+	mu           sync.Mutex
+	costs        map[string]float64           // jobID -> cost sum
+	tenantCosts  map[string]float64           // tenantID -> cost sum
+	recordedKeys map[string]bool              // cost_event_id -> true
+	transactions map[string][]CostTransaction // jobID -> list of transactions
 }
 
 func NewOperationCostEngine() *OperationCostEngine {
-	return &OperationCostEngine{costs: make(map[string]float64)}
+	return &OperationCostEngine{
+		costs:        make(map[string]float64),
+		tenantCosts:  make(map[string]float64),
+		recordedKeys: make(map[string]bool),
+		transactions: make(map[string][]CostTransaction),
+	}
 }
 
-func (ce *OperationCostEngine) RecordCost(jobID string, platformCost, providerCost float64) {
+// RecordCost records costs idempotently using costEventID as unique key.
+func (ce *OperationCostEngine) RecordCost(costEventID, jobID string, platformCost, providerCost float64) {
+	if costEventID == "" {
+		costEventID = jobID // fallback se ausente
+	}
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
+
+	if ce.recordedKeys[costEventID] {
+		return // Bloqueia cobrança duplicada do mesmo evento de custo
+	}
+	ce.recordedKeys[costEventID] = true
 	ce.costs[jobID] += platformCost + providerCost
+}
+
+// RecordTransaction records a structured CostTransaction with strict anti-duplicate enforcement.
+func (ce *OperationCostEngine) RecordTransaction(tx CostTransaction) {
+	if tx.CostEventID == "" {
+		if tx.CallID != "" {
+			tx.CostEventID = tx.CallID
+		} else {
+			tx.CostEventID = tx.JobID
+		}
+	}
+
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+
+	if ce.recordedKeys[tx.CostEventID] {
+		return // Idempotente: evita duplicidade por retry, fallback ou replay de webhook
+	}
+	ce.recordedKeys[tx.CostEventID] = true
+
+	if tx.CreatedAt.IsZero() {
+		tx.CreatedAt = time.Now().UTC()
+	}
+	tx.TotalCost = tx.PlatformCost + tx.ProviderCost
+
+	ce.transactions[tx.JobID] = append(ce.transactions[tx.JobID], tx)
+
+	// Apenas eventos marcados como cobráveis (Billable) somam ao custo financeiro real
+	if tx.Billable {
+		ce.costs[tx.JobID] += tx.TotalCost
+		if tx.TenantID != "" {
+			ce.tenantCosts[tx.TenantID] += tx.TotalCost
+		}
+	}
 }
 
 func (ce *OperationCostEngine) GetTotalCost(jobID string) float64 {
 	ce.mu.Lock()
 	defer ce.mu.Unlock()
 	return ce.costs[jobID]
+}
+
+func (ce *OperationCostEngine) GetTenantCost(tenantID string) float64 {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+	return ce.tenantCosts[tenantID]
+}
+
+func (ce *OperationCostEngine) GetTransactions(jobID string) []CostTransaction {
+	ce.mu.Lock()
+	defer ce.mu.Unlock()
+	list := ce.transactions[jobID]
+	out := make([]CostTransaction, len(list))
+	copy(out, list)
+	return out
 }

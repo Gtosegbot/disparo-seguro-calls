@@ -28,17 +28,21 @@ const (
 	EventCSFailure       AuditEventType = "CHATSEGURO_FAILURE"
 )
 
-// AuditLogEntry is a structured record of an operational event.
+// AuditLogEntry is a structured record of an operational event carrying correlation keys.
 type AuditLogEntry struct {
-	EventID    string         `json:"event_id"`
-	Timestamp  time.Time      `json:"timestamp"`
-	TenantID   string         `json:"tenant_id"`
-	CampaignID string         `json:"campaign_id"`
-	JobID      string         `json:"job_id"`
-	CallID     string         `json:"call_id"`
-	EventType  AuditEventType `json:"event_type"`
-	Source     string         `json:"source"`
-	Metadata   map[string]any `json:"metadata"`
+	EventID     string         `json:"event_id"`
+	Timestamp   time.Time      `json:"timestamp"`
+	TenantID    string         `json:"tenant_id"`
+	CampaignID  string         `json:"campaign_id"`
+	JobID       string         `json:"job_id"`
+	LeadID      string         `json:"lead_id,omitempty"`
+	CallID      string         `json:"call_id"`
+	Attempt     int            `json:"attempt,omitempty"`
+	Provider    string         `json:"provider,omitempty"`
+	CostEventID string         `json:"cost_event_id,omitempty"`
+	EventType   AuditEventType `json:"event_type"`
+	Source      string         `json:"source"`
+	Metadata    map[string]any `json:"metadata"`
 }
 
 // AuditTrail logs all critical actions for audit compliance.
@@ -51,6 +55,7 @@ func NewAuditTrail() *AuditTrail {
 	return &AuditTrail{logs: make([]AuditLogEntry, 0)}
 }
 
+// Log logs an audit entry with sensitive data sanitization.
 func (at *AuditTrail) Log(tenantID, campaignID, jobID, callID string, eventType AuditEventType, source string, meta map[string]any) {
 	at.mu.Lock()
 	defer at.mu.Unlock()
@@ -64,7 +69,30 @@ func (at *AuditTrail) Log(tenantID, campaignID, jobID, callID string, eventType 
 		CallID:     callID,
 		EventType:  eventType,
 		Source:     source,
-		Metadata:   meta,
+		Metadata:   SanitizeMetadata(meta),
+	}
+	at.logs = append(at.logs, entry)
+}
+
+// LogWithCorrelation logs an audit entry with full correlation context and sanitization.
+func (at *AuditTrail) LogWithCorrelation(ctx CorrelationContext, eventType AuditEventType, source string, meta map[string]any) {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+
+	entry := AuditLogEntry{
+		EventID:     uuid.New().String(),
+		Timestamp:   time.Now().UTC(),
+		TenantID:    ctx.TenantID,
+		CampaignID:  ctx.CampaignID,
+		JobID:       ctx.JobID,
+		LeadID:      ctx.LeadID,
+		CallID:      ctx.CallID,
+		Attempt:     ctx.Attempt,
+		Provider:    ctx.Provider,
+		CostEventID: ctx.CostEventID,
+		EventType:   eventType,
+		Source:      source,
+		Metadata:    SanitizeMetadata(meta),
 	}
 	at.logs = append(at.logs, entry)
 }
@@ -183,7 +211,7 @@ func (h *E2EHarness) SimulateCall(ctx context.Context, tenantID, campaignID, job
 	if providerName == "grok_realtime" {
 		providerCost = 1.25
 	}
-	h.Costs.RecordCost(jobID, platformCost, providerCost)
+	h.Costs.RecordCost(callID, jobID, platformCost, providerCost)
 	h.Audit.Log(tenantID, campaignID, jobID, callID, EventCostRecorded, "harness", map[string]any{
 		"platform_cost": platformCost,
 		"provider_cost": providerCost,
