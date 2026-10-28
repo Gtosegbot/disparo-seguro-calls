@@ -144,6 +144,10 @@ func (s *sessionStore) setChatwoot(ctx context.Context, id, cfgJSON string) erro
 	return err
 }
 
+func (s *sessionStore) deleteChatwoot(ctx context.Context, id string) error {
+	return s.setChatwoot(ctx, id, "")
+}
+
 func (s *sessionStore) setRecording(ctx context.Context, id string, on bool) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET recording = $1 WHERE id = $2`, on, id)
 	return err

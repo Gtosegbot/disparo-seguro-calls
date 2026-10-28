@@ -2,6 +2,7 @@ package dialer_test
 
 import (
 	"context"
+	"fmt"
 	"errors"
 	"math/rand"
 	"sync"
@@ -208,8 +209,8 @@ type mockRealtimeProvider struct {
 func (m *mockRealtimeProvider) Name() string { return m.name }
 func (m *mockRealtimeProvider) Connect(ctx context.Context) error { return nil }
 func (m *mockRealtimeProvider) SendAudio(ctx context.Context, pcm []byte) error { return nil }
-func (m *mockRealtimeProvider) ReceiveAudio(ctx context.Context) ([]byte, error) { return nil }
+func (m *mockRealtimeProvider) ReceiveAudio(ctx context.Context) ([]byte, error) { return nil, nil }
 func (m *mockRealtimeProvider) Close() error { return nil }
 
-type nullWriter struct{}
-func (nw *nullWriter) Write(p []byte) (n int, err error) { return len(p), nil }
+type nullWriter2 struct{}
+func (nw *nullWriter2) Write(p []byte) (n int, err error) { return len(p), nil }

@@ -46,6 +46,12 @@ func NewScheduler(q *Queue, ip InstanceProvider, log *slog.Logger) *Scheduler {
 	}
 }
 
+// Start launches the background scheduler supervisor.
+func (s *Scheduler) Start(ctx context.Context) {
+	s.log.Info("dialer scheduler engine ready")
+	<-ctx.Done()
+}
+
 // StartCampaign launches a background scheduler loop for a campaign.
 func (s *Scheduler) StartCampaign(ctx context.Context, campaignID string) {
 	s.mu.Lock()
@@ -69,6 +75,48 @@ func (s *Scheduler) StartCampaign(ctx context.Context, campaignID string) {
 
 	go s.campaignLoop(cCtx, campaignID)
 	s.log.Info("campaign scheduler started", "campaign_id", campaignID)
+}
+
+
+// PauseCampaign pauses the scheduler loop.
+func (s *Scheduler) PauseCampaign(campaignID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cancel, active := s.runningCampaigns[campaignID]
+	if !active {
+		return
+	}
+
+	cancel()
+	delete(s.runningCampaigns, campaignID)
+
+	camp, ok := s.queue.GetCampaign(campaignID)
+	if ok {
+		camp.Status = StatusPaused
+		s.queue.SaveCampaign(camp)
+	}
+	s.log.Info("campaign scheduler paused", "campaign_id", campaignID)
+}
+
+// GetMetrics returns basic metrics for the campaign.
+func (s *Scheduler) GetMetrics(campaignID string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	camp, ok := s.queue.GetCampaign(campaignID)
+	if !ok {
+		return map[string]any{"error": "campaign not found"}
+	}
+	active := false
+	if _, isRunning := s.runningCampaigns[campaignID]; isRunning {
+		active = true
+	}
+	return map[string]any{
+		"campaign_id": campaignID,
+		"status":      string(camp.Status),
+		"is_running":  active,
+	}
 }
 
 // StopCampaign stops the scheduler loop.

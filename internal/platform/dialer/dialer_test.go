@@ -2,7 +2,6 @@ package dialer_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"

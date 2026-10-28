@@ -1,10 +1,8 @@
 package dialer
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 )

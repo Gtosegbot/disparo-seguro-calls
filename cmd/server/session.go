@@ -14,6 +14,7 @@ import (
 	"wacalls/internal/voip/signaling"
 	"wacalls/internal/voip/wanode"
 	"wacalls/internal/wa"
+	"wacalls/internal/livekitbridge"
 
 	"wacalls/internal/platform/instance"
 
@@ -229,6 +230,7 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 	}
 	cm.OnStateChange = func(c *call.CallInfo) {
 		if c.IsEnded() {
+			livekitbridge.Default().DetachCall(c.CallID)
 			s.removeCall(c.CallID)
 			s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
 			return
@@ -248,8 +250,17 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 			rec.StartedAt = existing.StartedAt
 		}
 		s.mgr.broker.upsertCall(rec)
+
+		if c.StateData.State == core.CallStateActive {
+			phone, _ := s.resolvePeer(c.PeerJid)
+			if phone == "" {
+				phone = c.PeerJid
+			}
+			livekitbridge.Default().AttachCall(cm, c.CallID, phone)
+		}
 	}
 	cm.OnEnded = func(c *call.CallInfo) {
+		livekitbridge.Default().DetachCall(c.CallID)
 		s.removeCall(c.CallID)
 		s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
 	}
@@ -265,6 +276,10 @@ func (s *Session) wireCall(cm *call.CallManager, callID string) {
 		// Se esta chamada tem IA ativa, encaminha o áudio para o Voice Gateway
 		if ac.aiSessionID != "" && s.mgr.aiGateway != nil {
 			s.mgr.aiGateway.HandlePeerAudio(ac.aiSessionID, pcm16)
+		}
+		// Streaming para a sala LiveKit (IA Voice Agent)
+		if lkSess := livekitbridge.Default().GetSession(callID); lkSess != nil {
+			lkSess.PushPeerAudio(pcm16)
 		}
 		if ac.bridge == nil || ac.browserOpus == nil {
 			return

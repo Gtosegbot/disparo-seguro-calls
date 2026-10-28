@@ -13,6 +13,7 @@ import (
 
 	aigateway "wacalls/internal/ai/gateway"
 	"wacalls/internal/platform/instance"
+	"wacalls/internal/platform/dialer"
 )
 
 type SessionManager struct {
@@ -349,4 +350,48 @@ func (m *SessionManager) DeleteChatwootConfig(ctx context.Context, sessionID str
 	}
 	s.setChatwoot(ChatwootConfig{})
 	return m.store.deleteChatwoot(ctx, sessionID)
+}
+
+// GetInstancesPool satisfies dialer.InstanceProvider
+func (m *SessionManager) GetInstancesPool(ctx context.Context, ids []string) ([]dialer.InstanceInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []dialer.InstanceInfo
+	checkMap := make(map[string]bool)
+	for _, id := range ids {
+		checkMap[id] = true
+	}
+
+	for id, s := range m.sessions {
+		if len(ids) > 0 && !checkMap[id] {
+			continue
+		}
+		status := "OFFLINE"
+		if s.client != nil && s.client.IsConnected() && s.client.Store.ID != nil {
+			status = "CONNECTED"
+		} else if s.client != nil && s.client.IsConnected() {
+			status = "PAIRING"
+		}
+		out = append(out, dialer.InstanceInfo{
+			ID:                 id,
+			Status:             status,
+			ActiveCalls:        s.reg.count(),
+			MaxConcurrentCalls: m.maxCalls,
+		})
+	}
+	return out, nil
+}
+
+// StartOutgoingCall satisfies dialer.InstanceProvider
+func (m *SessionManager) StartOutgoingCall(ctx context.Context, instanceID, phone string) (string, error) {
+	s, ok := m.Get(instanceID)
+	if !ok {
+		return "", fmt.Errorf("session %s not found", instanceID)
+	}
+	if s.client.Store.ID == nil {
+		return "", fmt.Errorf("session %s not paired", instanceID)
+	}
+	peer := types.NewJID(normalizePhone(phone), types.DefaultUserServer)
+	return s.startOutgoing(ctx, peer, false, false)
 }

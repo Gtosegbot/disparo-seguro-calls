@@ -129,8 +129,9 @@ type AISession struct {
 
 	ID        string
 	TenantID  string
-	SessionID string // AstraCalls session id
-	CallID    string // AstraCalls call id
+	SessionID           string // AstraCalls session id
+	AstraCallsSessionID string
+	CallID              string // AstraCalls call id
 	AgentID   string
 	Profile   VoiceProfile
 	Provider  string // e.g. "grok_realtime"

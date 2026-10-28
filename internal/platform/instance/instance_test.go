@@ -1,11 +1,12 @@
-﻿package instance_test
+package instance_test
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"wacalls/internal/platform/instance"
 )
@@ -13,6 +14,7 @@ import (
 // Teste de criação e isolamento de Tenant com token
 func TestManager_CreateAndGet_TenantIsolation(t *testing.T) {
 	db := newMockDB()
+	defer db.Close()
 	sc := newMockSessionController()
 	mgr := instance.NewManager(db, sc)
 	ctx := context.Background()
@@ -26,8 +28,6 @@ func TestManager_CreateAndGet_TenantIsolation(t *testing.T) {
 	if inst.TenantID != "tenant-A" {
 		t.Errorf("expected tenant-A, got %s", inst.TenantID)
 	}
-
-	db.store[inst.ID] = inst
 
 	// 2. Leitura com o mesmo Tenant: OK
 	got, err := mgr.Get(ctx, "tenant-A", inst.ID)
@@ -48,6 +48,7 @@ func TestManager_CreateAndGet_TenantIsolation(t *testing.T) {
 // Teste de prevenção de duplicação de sessão (uma sessão whatsmeow por instância)
 func TestManager_DuplicateSessionPrevention(t *testing.T) {
 	db := newMockDB()
+	defer db.Close()
 	sc := newMockSessionController()
 	mgr := instance.NewManager(db, sc)
 	ctx := context.Background()
@@ -57,48 +58,27 @@ func TestManager_DuplicateSessionPrevention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create inst1: %v", err)
 	}
-	db.store[inst1.ID] = inst1
-	db.sessions[inst1.SessionID] = inst1.ID
 
-	// Tenta criar segunda instância simulando a mesma sessão (violação unique constraint)
-	inst2 := &instance.Instance{
-		ID:        "inst-2",
-		TenantID:  "tenant-A",
-		SessionID: inst1.SessionID, // mesma SessionID!
-		Status:    instance.StatePairing,
-	}
-
-	// O mock do banco deve retornar erro de UNIQUE constraint
-	db.forceUniqueErr = true
-	_, err = mgr.db.ExecContext(ctx, "INSERT ...", inst2.ID, inst2.TenantID, inst2.SessionID)
-	
-	// Mapeia o erro do mock e valida que o manager trataria como ErrDuplicate
-	var errMock error
-	if db.forceUniqueErr {
-		errMock = errors.New("UNIQUE constraint failed: instances.session_id")
-	}
-	
-	if errMock != nil {
-		// Simula comportamento do Create
-		var mappedErr error
-		if errMock.Error() == "UNIQUE constraint failed: instances.session_id" {
-			mappedErr = instance.ErrDuplicate
-		}
-		if mappedErr != instance.ErrDuplicate {
-			t.Errorf("expected ErrDuplicate, got %v", mappedErr)
-		}
+	// Tenta criar segunda instância com a mesma sessão Whatsmeow (violação unique constraint)
+	sc.fixedID = inst1.SessionID
+	_, err = mgr.Create(ctx, "tenant-A", "Line B")
+	if err != instance.ErrDuplicate {
+		t.Errorf("expected ErrDuplicate, got %v", err)
 	}
 }
 
 // Teste de ciclo de vida, capacity e transições para BUSY
 func TestManager_LifecycleAndCapacity(t *testing.T) {
 	db := newMockDB()
+	defer db.Close()
 	sc := newMockSessionController()
 	mgr := instance.NewManager(db, sc)
 	ctx := context.Background()
 
-	inst, _ := mgr.Create(ctx, "tenant-A", "Line A")
-	db.store[inst.ID] = inst
+	inst, err := mgr.Create(ctx, "tenant-A", "Line A")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
 
 	if inst.Status != instance.StatePairing {
 		t.Errorf("expected initial state PAIRING, got %s", inst.Status)
@@ -106,8 +86,6 @@ func TestManager_LifecycleAndCapacity(t *testing.T) {
 
 	// Mudar para CONNECTED
 	_ = mgr.UpdateStatus(ctx, inst.SessionID, instance.StateConnected, "5511999999999")
-	inst.Status = instance.StateConnected
-	inst.Phone = "5511999999999"
 
 	// Mocking active calls count to 3
 	sc.activeCalls[inst.SessionID] = 3
@@ -125,6 +103,7 @@ func TestManager_LifecycleAndCapacity(t *testing.T) {
 // Teste de recuperação de estado pós reinicialização (Recovery)
 func TestManager_RecoveryStateConsistency(t *testing.T) {
 	db := newMockDB()
+	defer db.Close()
 	sc := newMockSessionController()
 	mgr := instance.NewManager(db, sc)
 	ctx := context.Background()
@@ -132,10 +111,6 @@ func TestManager_RecoveryStateConsistency(t *testing.T) {
 	// 1. Criar instância e salvar estado CONNECTED
 	inst, _ := mgr.Create(ctx, "tenant-A", "Line A")
 	_ = mgr.UpdateStatus(ctx, inst.SessionID, instance.StateConnected, "5511999999999")
-	
-	inst.Status = instance.StateConnected
-	inst.Phone = "5511999999999"
-	db.store[inst.ID] = inst
 
 	// 2. Simular reinício do processo.
 	statusAfterRestore := instance.StateConnected
@@ -153,12 +128,12 @@ func TestManager_RecoveryStateConsistency(t *testing.T) {
 // Teste de vinculação/desvinculação de ChatSeguro por linha
 func TestManager_ChatSeguroIntegration(t *testing.T) {
 	db := newMockDB()
+	defer db.Close()
 	sc := newMockSessionController()
 	mgr := instance.NewManager(db, sc)
 	ctx := context.Background()
 
 	inst, _ := mgr.Create(ctx, "tenant-A", "Line A")
-	db.store[inst.ID] = inst
 
 	// 1. Vincular ChatSeguro
 	config := `{"url":"http://chatwoot","account_id":1,"account_token":"tok","inbox_id":123}`
@@ -191,12 +166,12 @@ func TestManager_ChatSeguroIntegration(t *testing.T) {
 // Teste de deleção e limpeza de recursos
 func TestManager_DeleteClean(t *testing.T) {
 	db := newMockDB()
+	defer db.Close()
 	sc := newMockSessionController()
 	mgr := instance.NewManager(db, sc)
 	ctx := context.Background()
 
 	inst, _ := mgr.Create(ctx, "tenant-A", "Line A")
-	db.store[inst.ID] = inst
 
 	err := mgr.Delete(ctx, "tenant-A", inst.ID)
 	if err != nil {
@@ -208,37 +183,37 @@ func TestManager_DeleteClean(t *testing.T) {
 	}
 }
 
-// ─── Mocks ───────────────────────────────────────────────────────────────────
+// ─── Mocks & Helpers ──────────────────────────────────────────────────────────
 
-type mockDB struct {
-	store          map[string]*instance.Instance
-	sessions       map[string]string // session_id -> instance_id
-	forceUniqueErr bool
-}
-
-func newMockDB() *mockDB {
-	return &mockDB{
-		store:    make(map[string]*instance.Instance),
-		sessions: make(map[string]string),
+func newMockDB() *sql.DB {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		panic(err)
 	}
-}
-
-func (m *mockDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	if m.forceUniqueErr {
-		return nil, errors.New("UNIQUE constraint failed: instances.session_id")
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS instances (
+		id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		session_id TEXT NOT NULL UNIQUE,
+		phone TEXT,
+		display_name TEXT,
+		status TEXT,
+		proxy_id TEXT,
+		chatseguro_inbox_id INTEGER,
+		max_concurrent_calls INTEGER,
+		created_at TIMESTAMP,
+		updated_at TIMESTAMP,
+		metadata BLOB
+	);
+	CREATE INDEX IF NOT EXISTS idx_instances_tenant ON instances(tenant_id);
+	CREATE INDEX IF NOT EXISTS idx_instances_session ON instances(session_id);`)
+	if err != nil {
+		panic(err)
 	}
-	return nil, nil
-}
-
-func (m *mockDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
-	return nil
-}
-
-func (m *mockDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return nil, nil
+	return db
 }
 
 type mockSessionController struct {
+	fixedID        string
 	sessions       map[string]string
 	activeCalls    map[string]int
 	deleted        map[string]bool
@@ -257,6 +232,9 @@ func newMockSessionController() *mockSessionController {
 }
 
 func (m *mockSessionController) CreateSession(name string) (string, error) {
+	if m.fixedID != "" {
+		return m.fixedID, nil
+	}
 	id := uuid()
 	m.sessions[id] = name
 	return id, nil
@@ -287,5 +265,5 @@ func (m *mockSessionController) DeleteChatwootConfig(ctx context.Context, sessio
 }
 
 func uuid() string {
-	return "mock-session-uuid-" + time.Now().String()
+	return "mock-session-uuid-" + time.Now().Format("20060102150405.000000000")
 }

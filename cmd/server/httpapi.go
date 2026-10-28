@@ -10,7 +10,6 @@ import (
 
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/media"
-	"wacalls/internal/platform/dialer"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"

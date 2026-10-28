@@ -18,6 +18,7 @@ type CampaignStatus string
 const (
 	StatusDraft     CampaignStatus = "DRAFT"
 	StatusReady     CampaignStatus = "READY"
+	CampaignReady                  = StatusReady
 	StatusRunning   CampaignStatus = "RUNNING"
 	StatusPaused    CampaignStatus = "PAUSED"
 	StatusDraining  CampaignStatus = "DRAINING"

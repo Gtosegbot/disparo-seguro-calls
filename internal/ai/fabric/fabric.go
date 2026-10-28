@@ -177,13 +177,16 @@ func (f *Fabric) ResolveProvider(ctx context.Context, policy session.ProviderPol
 			continue // Ignora desabilitados ou gravemente degradados
 		}
 
-		// Filtra por idioma
+				// Filtra por idioma ou classe de qualidade (premium, economy, balanced)
 		langMatch := false
 		for _, l := range item.Languages {
 			if l == requiredLang {
 				langMatch = true
 				break
 			}
+		}
+		if item.QualityClass == requiredLang {
+			langMatch = true
 		}
 		if !langMatch && requiredLang != "" {
 			continue

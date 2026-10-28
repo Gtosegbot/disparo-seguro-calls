@@ -158,6 +158,16 @@ func (p *dbProvider) dropSessionDB(ctx context.Context, id string) error {
 	return nil
 }
 
+// PingContext verifica a saúde da conexão do banco de dados para readiness probes
+func (p *dbProvider) PingContext(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.admin == nil {
+		return fmt.Errorf("conexão admin não inicializada")
+	}
+	return p.admin.PingContext(ctx)
+}
+
 func (p *dbProvider) close() {
 	if p.admin != nil {
 		_ = p.admin.Close()

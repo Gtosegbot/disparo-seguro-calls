@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
-	"github.com/google/uuid"
 
 	"wacalls/internal/ai/events"
 	"wacalls/internal/ai/fabric"
@@ -185,7 +183,7 @@ func (r *aiRouter) createSession(w http.ResponseWriter, req *http.Request) {
 // POST /api/ai/sessions/{id}/start
 func (r *aiRouter) startSession(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
-	sess, ok := r.sessionReg.Get(id)
+	sess, ok := r.sessionReg.GetByID(id)
 	if !ok {
 		writeErrorAI(w, http.StatusNotFound, "session not found")
 		return
@@ -205,7 +203,7 @@ func (r *aiRouter) startSession(w http.ResponseWriter, req *http.Request) {
 // POST /api/ai/sessions/{id}/stop
 func (r *aiRouter) stopSession(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
-	sess, ok := r.sessionReg.Get(id)
+	sess, ok := r.sessionReg.GetByID(id)
 	if !ok {
 		writeErrorAI(w, http.StatusNotFound, "session not found")
 		return
@@ -218,7 +216,7 @@ func (r *aiRouter) stopSession(w http.ResponseWriter, req *http.Request) {
 // GET /api/ai/sessions/{id}
 func (r *aiRouter) getSession(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
-	sess, ok := r.sessionReg.Get(id)
+	sess, ok := r.sessionReg.GetByID(id)
 	if !ok {
 		writeErrorAI(w, http.StatusNotFound, "session not found")
 		return

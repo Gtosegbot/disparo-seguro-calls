@@ -96,7 +96,7 @@ func newServer(ctx context.Context, pgURL, pgNamespace, staticDir string, maxCal
 	idemReg := dialer.NewIdempotencyRegistry()
 	jobStates := dialer.NewJobStateMachine()
 	costEngine := dialer.NewOperationCostEngine()
-	dialerSched := dialer.NewScheduler(dialerQueue, mgr, aiGW, log)
+	dialerSched := dialer.NewScheduler(dialerQueue, mgr, log)
 
 	// Inicia o scheduler em background
 	go dialerSched.Start(ctx)

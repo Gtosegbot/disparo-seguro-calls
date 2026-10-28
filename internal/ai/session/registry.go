@@ -5,6 +5,7 @@ package session
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 // ErrNotFound is returned when the requested session does not exist.
@@ -31,6 +32,15 @@ func (r *Registry) Register(s *AISession) {
 	r.mu.Unlock()
 }
 
+
+// GetByID returns the session by id without tenant check.
+func (r *Registry) GetByID(id string) (*AISession, bool) {
+	r.mu.RLock()
+	s, ok := r.sessions[id]
+	r.mu.RUnlock()
+	return s, ok
+}
+
 // Get returns the session for (id, tenantID), enforcing tenant isolation.
 func (r *Registry) Get(id, tenantID string) (*AISession, error) {
 	r.mu.RLock()
@@ -50,6 +60,17 @@ func (r *Registry) Remove(id string) {
 	r.mu.Lock()
 	delete(r.sessions, id)
 	r.mu.Unlock()
+}
+
+// List returns all active sessions across all tenants.
+func (r *Registry) List() []*AISession {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*AISession, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		out = append(out, s)
+	}
+	return out
 }
 
 // ListByTenant returns snapshots of all sessions owned by tenantID.

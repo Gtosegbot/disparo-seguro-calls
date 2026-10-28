@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -88,7 +87,7 @@ func (r *campaignsRouter) createCampaign(w http.ResponseWriter, req *http.Reques
 		TenantID:            tenantID,
 		Name:                body.Name,
 		Mode:                dialer.CampaignMode(body.Mode),
-		Status:              dialer.CampaignReady,
+		Status:              dialer.StatusReady,
 		MaxConcurrentCalls:  body.MaxConcurrentCalls,
 		DialIntervalSeconds: body.DialIntervalSeconds,
 		MaxAttempts:         body.MaxAttempts,
@@ -131,7 +130,7 @@ func (r *campaignsRouter) executeCampaign(w http.ResponseWriter, req *http.Reque
 	if jobID == "" {
 		jobID = uuid.New().String()
 	}
-	_, err := r.idemRegistry.CheckOrRegister(tenantID, contract.IdempotencyKey, jobID)
+	_, err = r.idemRegistry.CheckOrRegister(tenantID, contract.IdempotencyKey, jobID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)

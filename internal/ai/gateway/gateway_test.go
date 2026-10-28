@@ -3,7 +3,6 @@
 import (
 	"context"
 	"testing"
-	"time"
 
 	"wacalls/internal/ai/events"
 	"wacalls/internal/ai/gateway"

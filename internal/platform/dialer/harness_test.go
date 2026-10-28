@@ -2,7 +2,6 @@
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"wacalls/internal/platform/dialer"
