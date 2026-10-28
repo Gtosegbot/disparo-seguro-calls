@@ -12,6 +12,8 @@ import { useCallHold } from "@/hooks/useCallHold";
 import { useTransferCall } from "@/hooks/useTransferCall";
 import { useCallVideo } from "@/hooks/useCallVideo";
 import { formatCallDuration } from "@/utils/format";
+import { toggleSignLanguage } from "@/services/calls";
+import { toast } from "sonner";
 import type { CallStatus, CallSummary } from "@/types/call";
 
 const statusVariant: Record<CallStatus, "success" | "secondary" | "muted"> = {
@@ -48,6 +50,23 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const active = call.status === "connected";
+  const [signLang, setSignLang] = useState(call.signLanguageEnabled ?? false);
+  const [signLangBusy, setSignLangBusy] = useState(false);
+  const handleToggleSignLanguage = async () => {
+    if (signLangBusy) return;
+    setSignLangBusy(true);
+    const next = !signLang;
+    try {
+      await toggleSignLanguage(call.sessionId, call.callId, next);
+      setSignLang(next);
+      if (next) toast.success("🤟 Tradução em Libras / Sinais ativada!");
+      else toast.info("Tradução em Libras desativada");
+    } catch (err) {
+      toast.error("Erro ao alterar status de Libras");
+    } finally {
+      setSignLangBusy(false);
+    }
+  };
   const showVideo = video.state.peerVideo || video.state.localVideo;
 
   useEffect(() => {
@@ -110,6 +129,7 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
                 {formatCallDuration(call.startedAt, call.status)}
               </Badge>
               {held && <Badge variant="muted">Em espera</Badge>}
+              {signLang && <Badge variant="secondary" className="text-xs">🤟 Libras Ativo</Badge>}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -162,6 +182,25 @@ export const CallCard = ({ call }: { call: CallSummary }) => {
                 </TooltipTrigger>
                 <TooltipContent>
                   {video.state.localVideo ? "Desligar vídeo" : "Ativar vídeo"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+                        {active && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={signLang ? "secondary" : "outline"}
+                    size="icon"
+                    disabled={signLangBusy}
+                    onClick={handleToggleSignLanguage}
+                    className={signLang ? "border-primary text-primary" : ""}
+                    aria-label="Libras / Sinais (Opcional)"
+                  >
+                    <span className="text-base select-none">🤟</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {signLang ? "Desativar Libras / Sinais" : "🤟 Ativar Libras / Sinais (Opcional)"}
                 </TooltipContent>
               </Tooltip>
             )}

@@ -10,12 +10,13 @@ import { useDevices } from "@/stores/devices";
 export const Dialer = ({ sid }: { sid: string }) => {
   const [phone, setPhone] = useState("");
   const [video, setVideo] = useState(false);
+  const [signLang, setSignLang] = useState(false);
   const micId = useDevices((s) => s.micId);
   const startCall = useStartCall(sid, micId);
 
   const submit = () => {
     if (!phone.trim() || startCall.isPending) return;
-    startCall.mutate({ phone: phone.trim(), record: false, video }, { onSuccess: () => setPhone("") });
+    startCall.mutate({ phone: phone.trim(), record: false, video, signLanguage: signLang }, { onSuccess: () => setPhone("") });
   };
 
   return (
@@ -36,7 +37,7 @@ export const Dialer = ({ sid }: { sid: string }) => {
             inputMode="tel"
             className="min-w-0 flex-1"
           />
-          <Button
+                    <Button
             type="button"
             variant={video ? "default" : "outline"}
             size="sm"
@@ -45,6 +46,18 @@ export const Dialer = ({ sid }: { sid: string }) => {
           >
             <Video className="h-4 w-4" />
             Vídeo
+          </Button>
+          <Button
+            type="button"
+            variant={signLang ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setSignLang((v) => !v)}
+            aria-pressed={signLang}
+            title="Libras / Sinais (Opcional)"
+            className={signLang ? "border-primary text-primary font-medium" : "text-muted-foreground"}
+          >
+            <span className="mr-1 text-sm">🤟</span>
+            Libras
           </Button>
           <Button onClick={submit} disabled={startCall.isPending || !phone.trim()}>
             <Phone className="h-4 w-4" />

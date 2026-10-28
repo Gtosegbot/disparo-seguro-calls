@@ -9,6 +9,7 @@ export type CallSummary = {
   startedAt: number;
   status: CallStatus;
   held?: boolean;
+  signLanguageEnabled?: boolean;
 };
 
 export type IncomingPayload = { sessionId: string; callId: string; peer: string; video: boolean; offeredAt: number };

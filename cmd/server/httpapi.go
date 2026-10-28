@@ -10,6 +10,7 @@ import (
 
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/media"
+	"wacalls/internal/livekitbridge"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
@@ -45,6 +46,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/transfer", s.handleTransfer)
 	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/pickup", s.handlePickup)
 	mux.HandleFunc("DELETE /api/sessions/{sid}/calls/{id}", s.handleEndCall)
+	mux.HandleFunc("POST /api/sessions/{sid}/calls/{id}/sign-language", s.handleSignLanguage)
+	mux.HandleFunc("POST /api/calls/{id}/sign-language", s.handleSignLanguageDirect)
 	mux.HandleFunc("GET /api/sessions/{sid}/history", s.handleHistory)
 
 	// Mensageria (whatsmeow)
@@ -254,6 +257,8 @@ func widgetAllowed(r *http.Request) bool {
 	// operações de chamada: iniciar, atender/recusar, webrtc, vídeo, encerrar
 	// (/api/sessions/{sid}/calls e abaixo). Não abre a gestão de sessões em si.
 	case strings.HasPrefix(p, "/api/sessions/") && strings.Contains(p, "/calls"):
+		return true
+	case strings.HasPrefix(p, "/api/calls/"):
 		return true
 	}
 	return false
@@ -556,6 +561,7 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 		DurationMs int    `json:"duration_ms"`
 		Record     bool   `json:"record"`
 		Video      bool   `json:"video"`
+		SignLanguage bool   `json:"sign_language"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Phone) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "phone required"})
@@ -574,6 +580,17 @@ func (s *server) doStartCall(sess *Session, w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if body.SignLanguage {
+		if lkSess := livekitbridge.Default().GetSession(callID); lkSess != nil {
+			payload, _ := json.Marshal(map[string]any{
+				"action":     "toggle_sign_language",
+				"enabled":    true,
+				"call_id":    callID,
+				"session_id": sess.id,
+			})
+			_ = lkSess.SendDataPacket("sign_control", payload)
+		}
 	}
 	s.broker.upsertCall(CallRecord{
 		SessionID: sess.id, CallID: callID, Owner: &owner, Direction: "outbound", Peer: peer.String(),
@@ -748,4 +765,58 @@ func (s *server) handleReadiness(w http.ResponseWriter, req *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"READY","database":"OK"}`))
+}
+
+
+func (s *server) handleSignLanguage(w http.ResponseWriter, r *http.Request) {
+	sid := r.PathValue("sid")
+	id := r.PathValue("id")
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		body.Enabled = true
+	}
+
+	if lkSess := livekitbridge.Default().GetSession(id); lkSess != nil {
+		payload, _ := json.Marshal(map[string]any{
+			"action":     "toggle_sign_language",
+			"enabled":    body.Enabled,
+			"call_id":    id,
+			"session_id": sid,
+		})
+		_ = lkSess.SendDataPacket("sign_control", payload)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                  true,
+		"callId":              id,
+		"sessionId":           sid,
+		"signLanguageEnabled": body.Enabled,
+	})
+}
+
+func (s *server) handleSignLanguageDirect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		body.Enabled = true
+	}
+
+	if lkSess := livekitbridge.Default().GetSession(id); lkSess != nil {
+		payload, _ := json.Marshal(map[string]any{
+			"action":  "toggle_sign_language",
+			"enabled": body.Enabled,
+			"call_id": id,
+		})
+		_ = lkSess.SendDataPacket("sign_control", payload)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                  true,
+		"callId":              id,
+		"signLanguageEnabled": body.Enabled,
+	})
 }

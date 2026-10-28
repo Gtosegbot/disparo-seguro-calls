@@ -2,12 +2,13 @@ import { apiPost, apiDelete } from "@/lib/api";
 import { getClientId } from "@/lib/client-id";
 import { apiUrl, getApiKey } from "@/lib/auth";
 
-export const startCall = (sid: string, phone: string, record: boolean, video: boolean) =>
+export const startCall = (sid: string, phone: string, record: boolean, video: boolean, signLanguage?: boolean) =>
   apiPost<{ call: { callId: string } }>(`/api/sessions/${sid}/calls`, {
     phone,
     duration_ms: 300_000,
     record,
     video,
+    sign_language: signLanguage ?? false,
   });
 
 export const acceptCall = (sid: string, callId: string) =>
@@ -48,3 +49,8 @@ export type VideoAction = "request" | "accept" | "reject" | "stop";
 // ou desligar o próprio vídeo (downgrade).
 export const callVideo = (sid: string, callId: string, action: VideoAction) =>
   apiPost(`/api/sessions/${sid}/calls/${callId}/video/${action}`, {});
+
+
+// Alterna o módulo de Tradução de Língua de Sinais (Libras/ASL) sob demanda
+export const toggleSignLanguage = (sid: string, callId: string, enabled: boolean) =>
+  apiPost<{ ok: boolean; callId: string; signLanguageEnabled: boolean }>('/api/sessions/' + sid + '/calls/' + callId + '/sign-language', { enabled });
